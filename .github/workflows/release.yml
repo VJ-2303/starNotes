@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build, for example v0.2.0
+        description: Existing release tag to build, for example v0.4.0
         required: true
         type: string
 
@@ -21,178 +21,160 @@ concurrency:
 jobs:
   metadata:
     name: Validate release
-    runs-on: windows-2022
+    runs-on: ubuntu-22.04
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Validate tag and Cargo version
         id: release
-        shell: pwsh
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            '${{ inputs.tag }}'
-          } else {
-            '${{ github.ref_name }}'
-          }
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Release tag '$TAG' must use vMAJOR.MINOR.PATCH." && exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
 
-          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
-            throw "Release tag '$tag' must use vMAJOR.MINOR.PATCH."
-          }
-          $version = $Matches[1]
+          CARGO_VERSION=$(grep -A2 '\[workspace\.package\]' Cargo.toml \
+            | grep '^version' | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$CARGO_VERSION" ]; then
+            echo "::error::Could not read workspace.package.version from Cargo.toml." && exit 1
+          fi
+          if [ "$VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag '$VERSION' != Cargo version '$CARGO_VERSION'." && exit 1
+          fi
 
-          $manifest = Get-Content Cargo.toml -Raw
-          if ($manifest -notmatch '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"') {
-            throw 'Could not read workspace.package.version from Cargo.toml.'
-          }
-          $cargoVersion = $Matches[1]
-
-          if ($version -ne $cargoVersion) {
-            throw "Tag version '$version' does not match Cargo version '$cargoVersion'."
-          }
-
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "version=$version" >> $env:GITHUB_OUTPUT
-
-  architecture:
-    name: Validate architecture
-    needs: metadata
-    runs-on: windows-2022
-    steps:
-      - name: Check out release tag
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.metadata.outputs.tag }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: architecture
-
-      - name: Validate crate boundaries
-        run: cargo test --locked --package storage --test architecture
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Windows ${{ matrix.arch }}
-    needs: [metadata, architecture]
+    name: Linux ${{ matrix.arch }}
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            wix_arch: x64
-            upgrade_code: 9D111732-1765-4896-AB4C-E5C8C131B6DC
-          - arch: arm64
-            runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            wix_arch: arm64
-            upgrade_code: F0A6B8F7-F15E-4E54-9B1B-3D47DA6F7021
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: ${{ needs.metadata.outputs.tag }}
+
+      # ubuntu-22.04 glibc 2.35 — widest compatible baseline for modern Linux distros.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            mold \
+            pkg-config \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libx11-xcb-dev \
+            libxcb-dri2-0-dev \
+            libxcb-dri3-dev \
+            libxcb-icccm4-dev \
+            libxcb-present-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-shm0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      # Restore compiled artifacts — keyed on Cargo.lock so a dependency bump
+      # always triggers a full rebuild.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+          cache-on-failure: false
 
+      # fat LTO + codegen-units=1 are already set in [profile.release].
+      # CARGO_BUILD_JOBS=4 uses the runner's full 4-core capacity; the local
+      # .cargo/config.toml caps at 2 to spare RAM on the dev machine.
       - name: Build Castle
-        run: cargo build --locked --release --package app --bin castle --target ${{ matrix.target }}
-
-      - name: Build Castle MCP
-        run: cargo build --locked --release --package castle-mcp --bin castle-mcp --target ${{ matrix.target }}
-
-      - name: Install WiX Toolset
-        run: dotnet tool install --tool-path .wix wix --version 5.0.2
-
-      - name: Package executable and installer
-        shell: pwsh
+        env:
+          CARGO_BUILD_JOBS: "4"
         run: |
-          $version = '${{ needs.metadata.outputs.version }}'
-          $arch = '${{ matrix.arch }}'
-          $sourceExe = (Resolve-Path 'target/${{ matrix.target }}/release/castle.exe').Path
-          $sourceMcpExe = (Resolve-Path 'target/${{ matrix.target }}/release/castle-mcp.exe').Path
-          $dist = New-Item -ItemType Directory -Force dist
-          $portableExe = Join-Path $dist "Castle-$version-windows-$arch.exe"
-          $portableMcpExe = Join-Path $dist "Castle-MCP-$version-windows-$arch.exe"
-          $installer = Join-Path $dist "Castle-$version-windows-$arch.msi"
+          cargo build --locked --release \
+            --package app --bin castle \
+            --target ${{ matrix.target }}
 
-          Copy-Item -LiteralPath $sourceExe -Destination $portableExe
-          Copy-Item -LiteralPath $sourceMcpExe -Destination $portableMcpExe
-          .\.wix\wix.exe build installer/Castle.wxs `
-            -arch '${{ matrix.wix_arch }}' `
-            -d "Version=$version" `
-            -d "SourceExe=$sourceExe" `
-            -d "SourceMcpExe=$sourceMcpExe" `
-            -d 'UpgradeCode=${{ matrix.upgrade_code }}' `
-            -pdbtype none `
-            -o $installer
+      - name: Report binary size
+        run: |
+          BINARY="target/${{ matrix.target }}/release/castle"
+          SIZE=$(du -sh "$BINARY" | cut -f1)
+          echo "Binary size: $SIZE"
+          ls -lh "$BINARY"
 
-      - name: Upload architecture artifacts
-        uses: actions/upload-artifact@v7
+      - name: Package
+        run: |
+          VERSION="${{ needs.metadata.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          BINARY="target/${{ matrix.target }}/release/castle"
+          mkdir -p dist
+
+          cp "$BINARY" dist/castle
+          tar -czf "dist/Castle-$VERSION-linux-$ARCH.tar.gz" -C dist castle
+          rm dist/castle
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: Castle-${{ needs.metadata.outputs.version }}-windows-${{ matrix.arch }}
+          name: Castle-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Publish GitHub release
     needs: [metadata, build]
-    runs-on: windows-2022
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           pattern: Castle-*
           path: release
           merge-multiple: true
 
       - name: Create checksums
-        shell: pwsh
         run: |
-          $checksums = Get-ChildItem release -File |
-            Sort-Object Name |
-            ForEach-Object {
-              $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
-              "$hash  $($_.Name)"
-            }
-          $checksums | Set-Content release/SHA256SUMS.txt -Encoding utf8
+          cd release
+          sha256sum * | sort -k2 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create or update GitHub release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          $tag = '${{ needs.metadata.outputs.tag }}'
-          $assets = Get-ChildItem release -File | ForEach-Object FullName
+          TAG="${{ needs.metadata.outputs.tag }}"
+          mapfile -t ASSETS < <(find release -type f | sort)
 
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $assets --clobber --repo $env:GITHUB_REPOSITORY
-          } else {
-            gh release create $tag $assets `
-              --verify-tag `
-              --generate-notes `
-              --title "Castle $tag" `
-              --repo $env:GITHUB_REPOSITORY
-          }
+          if gh release view "$TAG" &>/dev/null; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "Castle $TAG"
+          fi

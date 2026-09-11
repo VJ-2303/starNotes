@@ -1,16 +1,15 @@
 # Releasing Castle
 
-Castle releases are built by GitHub Actions for Windows x86-64 and ARM64. Each release contains standalone Castle and Castle MCP executables, an MSI installer, and SHA-256 checksums.
+Castle releases are built by GitHub Actions for Linux x86-64. Each release contains a standalone `castle` binary packaged as a `.tar.gz` archive and a `SHA256SUMS.txt` checksum file.
 
 ## Publish a release
 
 1. Update `version` under `[workspace.package]` in `Cargo.toml`.
-2. Refresh the lockfile and verify the release build:
+2. Refresh the lockfile and verify the release build locally:
 
    ```sh
    cargo check --workspace --all-targets
    cargo build --locked --release --package app --bin castle
-   cargo build --locked --release --package castle-mcp --bin castle-mcp
    ```
 
 3. Commit the version change:
@@ -28,14 +27,10 @@ Castle releases are built by GitHub Actions for Windows x86-64 and ARM64. Each r
    git push origin vX.Y.Z
    ```
 
-The `Release` workflow checks that the tag matches the Cargo version, builds both architectures on native GitHub runners, packages the MSI installers, and creates the GitHub release with generated release notes.
+The `Release` workflow checks that the tag matches the Cargo version, installs system dependencies, builds the optimised binary, packages it as a `.tar.gz`, and creates the GitHub release with generated release notes.
 
 To rerun publishing for an existing tag, open **Actions → Release → Run workflow** and enter the tag. Existing assets with the same names are replaced.
 
 ## Version requirements
 
-Release tags must use `vMAJOR.MINOR.PATCH`, for example `v0.2.0`. The tag without its leading `v` must exactly match the workspace version in `Cargo.toml`.
-
-## Signing
-
-Artifacts are currently unsigned. Before distributing Castle broadly, add Authenticode signing for both the executable and MSI in the release workflow to avoid Windows SmartScreen warnings.
+Release tags must use `vMAJOR.MINOR.PATCH`, for example `v0.4.0`. The tag without its leading `v` must exactly match the workspace version in `Cargo.toml`.
