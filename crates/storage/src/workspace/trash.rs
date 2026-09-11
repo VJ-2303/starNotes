@@ -1,0 +1,676 @@
+use std::path::PathBuf;
+
+use anyhow::{Result, bail};
+use sea_orm::{DbBackend, Statement};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrashItemKind {
+    Project,
+    Note,
+}
+
+impl TrashItemKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Note => "note",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Project => "Project",
+            Self::Note => "Note",
+        }
+    }
+
+    fn table(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Note => "note",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrashItem {
+    pub kind: TrashItemKind,
+    pub id: u32,
+    pub title: String,
+    pub location: Option<String>,
+    pub deleted_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoveToTrash {
+    pub kind: TrashItemKind,
+    pub id: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreTrashItem(pub MoveToTrash);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PurgeTrashItem(pub MoveToTrash);
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PurgedArtifacts {
+    pub managed_files: Vec<PathBuf>,
+    pub attachment_note_ids: Vec<u32>,
+}
+
+pub async fn load_trash(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+) -> Result<Vec<TrashItem>> {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"
+            SELECT kind, id, title, location, deleted_at FROM (
+                SELECT 'project' AS kind, p.id, p.name AS title, NULL AS location, p.deleted_at
+                FROM project p WHERE p.deleted_at IS NOT NULL
+                UNION ALL
+                SELECT 'note', n.id, n.title, COALESCE(p.name, 'Standalone'), n.deleted_at
+                FROM note n LEFT JOIN project p ON p.id = n.project_id
+                WHERE n.deleted_at IS NOT NULL
+            )
+            ORDER BY deleted_at DESC, title ASC
+            "#,
+        ))
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let kind = match row.try_get::<String>("", "kind")?.as_str() {
+            "project" => TrashItemKind::Project,
+            _ => TrashItemKind::Note,
+        };
+        items.push(TrashItem {
+            kind,
+            id: row.try_get::<i64>("", "id")? as u32,
+            title: row.try_get("", "title")?,
+            location: row.try_get("", "location")?,
+            deleted_at: row.try_get("", "deleted_at")?,
+        });
+    }
+    Ok(items)
+}
+
+pub async fn move_to_trash(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: MoveToTrash,
+    deleted_at: i64,
+) -> Result<()> {
+    db.execute_raw(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        format!(
+            "UPDATE {} SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+            item.kind.table()
+        ),
+        [deleted_at.into(), (item.id as i64).into()],
+    ))
+    .await?;
+    remove_trashed_item_from_search_index(db, item).await?;
+    Ok(())
+}
+
+pub async fn restore_item(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: RestoreTrashItem,
+) -> Result<()> {
+    ensure_parent_available(db, item.0).await?;
+    let sql = if item.0.kind == TrashItemKind::Project {
+        "UPDATE project SET deleted_at = NULL, archived = 0 WHERE id = ? AND deleted_at IS NOT NULL"
+            .to_string()
+    } else {
+        format!(
+            "UPDATE {} SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+            item.0.kind.table()
+        )
+    };
+    let result = db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [(item.0.id as i64).into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        bail!("This item is no longer in Trash");
+    }
+    index_restored_item_in_search_index(db, item.0).await?;
+    Ok(())
+}
+
+pub async fn purge_item(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: PurgeTrashItem,
+) -> Result<PurgedArtifacts> {
+    let mut artifacts = PurgedArtifacts::default();
+    remove_purged_item_from_search_index(db, item.0).await?;
+
+    if item.0.kind == TrashItemKind::Note {
+        let row = db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT file_path, file_managed_by_app FROM note WHERE id = ? AND deleted_at IS NOT NULL",
+                [(item.0.id as i64).into()],
+            ))
+            .await?;
+
+        if let Some(row) = row {
+            artifacts.attachment_note_ids.push(item.0.id);
+            let managed = row
+                .try_get::<bool>("", "file_managed_by_app")
+                .unwrap_or(false);
+            if managed && let Ok(Some(path)) = row.try_get::<Option<String>>("", "file_path") {
+                artifacts.managed_files.push(PathBuf::from(path));
+            }
+        }
+    } else if item.0.kind == TrashItemKind::Project {
+        let rows = db
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT id, file_path, file_managed_by_app FROM note WHERE project_id = ?",
+                [(item.0.id as i64).into()],
+            ))
+            .await?;
+
+        for row in rows {
+            artifacts
+                .attachment_note_ids
+                .push(row.try_get::<i64>("", "id")? as u32);
+            if row.try_get::<bool>("", "file_managed_by_app")?
+                && let Some(path) = row.try_get::<Option<String>>("", "file_path")?
+            {
+                artifacts.managed_files.push(PathBuf::from(path));
+            }
+        }
+
+        db.execute_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM note WHERE project_id = ?",
+            [(item.0.id as i64).into()],
+        ))
+        .await?;
+    }
+
+    db.execute_raw(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        format!(
+            "DELETE FROM {} WHERE id = ? AND deleted_at IS NOT NULL",
+            item.0.kind.table()
+        ),
+        [(item.0.id as i64).into()],
+    ))
+    .await?;
+    Ok(artifacts)
+}
+
+async fn remove_trashed_item_from_search_index(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: MoveToTrash,
+) -> Result<()> {
+    use crate::workspace::search as search_index;
+    match item.kind {
+        TrashItemKind::Project => {
+            search_index::remove_project_subtree_from_index(db, item.id).await?;
+        }
+        TrashItemKind::Note => {
+            search_index::remove_note_from_index(db, item.id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn index_restored_item_in_search_index(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: MoveToTrash,
+) -> Result<()> {
+    use crate::workspace::search as search_index;
+    match item.kind {
+        TrashItemKind::Project => {
+            search_index::index_restored_project_subtree(db, item.id).await?;
+        }
+        TrashItemKind::Note => {
+            search_index::index_restored_note(db, item.id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn remove_purged_item_from_search_index(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: MoveToTrash,
+) -> Result<()> {
+    use crate::workspace::search as search_index;
+    match item.kind {
+        TrashItemKind::Project => {
+            search_index::remove_project_subtree_from_index(db, item.id).await?;
+        }
+        TrashItemKind::Note => {
+            search_index::remove_note_from_index(db, item.id).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn purge_all(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+) -> Result<PurgedArtifacts> {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"
+            SELECT n.id, n.file_path, n.file_managed_by_app
+            FROM note n
+            LEFT JOIN project p ON p.id = n.project_id
+            WHERE n.deleted_at IS NOT NULL OR p.deleted_at IS NOT NULL
+            "#,
+        ))
+        .await?;
+
+    let mut artifacts = PurgedArtifacts {
+        managed_files: Vec::new(),
+        attachment_note_ids: Vec::with_capacity(rows.len()),
+    };
+
+    for row in rows {
+        artifacts
+            .attachment_note_ids
+            .push(row.try_get::<i64>("", "id")? as u32);
+        if row.try_get::<bool>("", "file_managed_by_app")?
+            && let Some(path) = row.try_get::<Option<String>>("", "file_path")?
+        {
+            artifacts.managed_files.push(PathBuf::from(path));
+        }
+    }
+
+    for sql in [
+        "DELETE FROM note WHERE deleted_at IS NOT NULL",
+        "DELETE FROM note WHERE project_id IN (SELECT id FROM project WHERE deleted_at IS NOT NULL)",
+        "DELETE FROM project WHERE deleted_at IS NOT NULL",
+    ] {
+        db.execute_raw(Statement::from_string(DbBackend::Sqlite, sql))
+            .await?;
+    }
+    crate::workspace::search::rebuild_search_index(db).await?;
+    Ok(artifacts)
+}
+
+async fn ensure_parent_available(
+    db: &(
+         impl sea_orm::ConnectionTrait
+         + sea_orm::TransactionTrait<Transaction = sea_orm::DatabaseTransaction>
+     ),
+    item: MoveToTrash,
+) -> Result<()> {
+    let sql = match item.kind {
+        TrashItemKind::Project => return Ok(()),
+        TrashItemKind::Note => {
+            "SELECT p.deleted_at FROM note n LEFT JOIN project p ON p.id = n.project_id WHERE n.id = ?"
+        }
+    };
+    if let Some(row) = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [(item.id as i64).into()],
+        ))
+        .await?
+        && row.try_get::<Option<i64>>("", "deleted_at")?.is_some()
+    {
+        bail!("Restore the parent item first");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use entity::{note, project};
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{
+        ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
+        EntityTrait, QueryFilter,
+    };
+
+    #[tokio::test]
+    async fn restoring_note_preserves_file_and_cached_content() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+
+        let inserted = note::ActiveModel {
+            title: Set("Feature plan".to_string()),
+            project_id: Set(None),
+            file_path: Set(Some("C:\\notes\\features.md".to_string())),
+            file_managed_by_app: Set(false),
+            cached_content: Set("# Features\n\nRestorable content".to_string()),
+            file_missing_since: Set(None),
+            created_at: Set(10),
+            updated_at: Set(20),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let request = MoveToTrash {
+            kind: TrashItemKind::Note,
+            id: inserted.id as u32,
+        };
+
+        move_to_trash(&db, request, 30).await?;
+        restore_item(&db, RestoreTrashItem(request)).await?;
+
+        let restored = note::Entity::find_by_id(inserted.id)
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("restored note is missing"))?;
+        assert_eq!(restored.deleted_at, None);
+        assert_eq!(restored.file_path, inserted.file_path);
+        assert_eq!(restored.file_managed_by_app, inserted.file_managed_by_app);
+        assert_eq!(restored.cached_content, inserted.cached_content);
+        assert!(restore_item(&db, RestoreTrashItem(request)).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn purging_note_returns_its_managed_file_and_attachment_id() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let inserted = note::ActiveModel {
+            title: Set("Disposable note".to_string()),
+            project_id: Set(None),
+            file_path: Set(Some("C:\\notes\\disposable.md".to_string())),
+            file_managed_by_app: Set(true),
+            cached_content: Set(String::new()),
+            file_missing_since: Set(None),
+            created_at: Set(10),
+            updated_at: Set(10),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let request = MoveToTrash {
+            kind: TrashItemKind::Note,
+            id: inserted.id as u32,
+        };
+        move_to_trash(&db, request, 20).await?;
+
+        let artifacts = purge_item(&db, PurgeTrashItem(request)).await?;
+
+        assert_eq!(
+            artifacts,
+            PurgedArtifacts {
+                managed_files: vec![PathBuf::from("C:\\notes\\disposable.md")],
+                attachment_note_ids: vec![inserted.id as u32],
+            }
+        );
+        assert!(
+            note::Entity::find_by_id(inserted.id)
+                .one(&db)
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn archived_projects_migrate_to_trash_and_notes_restore() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, Some(4)).await?;
+        db.execute_unprepared(
+            "INSERT INTO project (name, archived, position) VALUES ('Archived', 1, 0)",
+        )
+        .await?;
+        let project_id = 1_i64;
+        Migrator::up(&db, None).await?;
+
+        let items = load_trash(&db).await?;
+        assert!(
+            items.iter().any(|item| {
+                item.kind == TrashItemKind::Project && item.id == project_id as u32
+            })
+        );
+
+        restore_item(
+            &db,
+            RestoreTrashItem(MoveToTrash {
+                kind: TrashItemKind::Project,
+                id: project_id as u32,
+            }),
+        )
+        .await?;
+
+        let note = note::ActiveModel {
+            title: Set("Recover me".to_string()),
+            project_id: Set(Some(project_id)),
+            file_path: Set(None),
+            file_managed_by_app: Set(false),
+            cached_content: Set(String::new()),
+            file_missing_since: Set(None),
+            created_at: Set(1),
+            updated_at: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let request = MoveToTrash {
+            kind: TrashItemKind::Note,
+            id: note.id as u32,
+        };
+        move_to_trash(&db, request, 42).await?;
+        assert_eq!(load_trash(&db).await?.len(), 1);
+        restore_item(&db, RestoreTrashItem(request)).await?;
+        assert!(load_trash(&db).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_items_require_their_project_to_be_restored_first() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+
+        let project = project::ActiveModel {
+            name: Set("Trashed project".to_string()),
+            archived: Set(false),
+            position: Set(0),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let note = note::ActiveModel {
+            title: Set("Nested note".to_string()),
+            project_id: Set(Some(project.id)),
+            file_path: Set(None),
+            file_managed_by_app: Set(false),
+            cached_content: Set(String::new()),
+            file_missing_since: Set(None),
+            created_at: Set(1),
+            updated_at: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+
+        let note_request = MoveToTrash {
+            kind: TrashItemKind::Note,
+            id: note.id as u32,
+        };
+        move_to_trash(&db, note_request, 1).await?;
+        move_to_trash(
+            &db,
+            MoveToTrash {
+                kind: TrashItemKind::Project,
+                id: project.id as u32,
+            },
+            2,
+        )
+        .await?;
+
+        assert!(
+            restore_item(&db, RestoreTrashItem(note_request))
+                .await
+                .is_err()
+        );
+        restore_item(
+            &db,
+            RestoreTrashItem(MoveToTrash {
+                kind: TrashItemKind::Project,
+                id: project.id as u32,
+            }),
+        )
+        .await?;
+        assert!(
+            restore_item(&db, RestoreTrashItem(note_request))
+                .await
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_note_trash_cycles_release_pool_connections() -> Result<()> {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(2).min_connections(1);
+        let db = Database::connect(options).await?;
+        Migrator::up(&db, None).await?;
+        let inserted = note::ActiveModel {
+            title: Set("Repeated restore".to_string()),
+            project_id: Set(None),
+            file_path: Set(None),
+            file_managed_by_app: Set(false),
+            cached_content: Set("# Content".to_string()),
+            file_missing_since: Set(None),
+            created_at: Set(1),
+            updated_at: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let request = MoveToTrash {
+            kind: TrashItemKind::Note,
+            id: inserted.id as u32,
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for cycle in 0..20 {
+                move_to_trash(&db, request, cycle).await?;
+                assert_eq!(load_trash(&db).await?.len(), 1);
+                restore_item(&db, RestoreTrashItem(request)).await?;
+                assert!(load_trash(&db).await?.is_empty());
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn moving_one_note_keeps_other_search_results() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        for title in ["Keep searchable", "Trash me"] {
+            note::ActiveModel {
+                title: Set(title.to_string()),
+                project_id: Set(None),
+                file_path: Set(None),
+                file_managed_by_app: Set(false),
+                cached_content: Set(format!("body for {title}")),
+                file_missing_since: Set(None),
+                created_at: Set(1),
+                updated_at: Set(1),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await?;
+        }
+        crate::workspace::search::rebuild_search_index(&db).await?;
+        let trashed = note::Entity::find()
+            .filter(note::Column::Title.eq("Trash me"))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("seeded note is missing"))?;
+        move_to_trash(
+            &db,
+            MoveToTrash {
+                kind: TrashItemKind::Note,
+                id: trashed.id as u32,
+            },
+            5,
+        )
+        .await?;
+        let hits = crate::workspace::search::search_workspace(&db, "searchable", 10).await?;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Keep searchable");
+        let trashed_hits = crate::workspace::search::search_workspace(&db, "Trash me", 10).await?;
+        assert!(trashed_hits.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "perf baseline: move_to_trash incremental search index maintenance"]
+    async fn baseline_move_to_trash_rebuilds_whole_index() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        for index in 0..200 {
+            note::ActiveModel {
+                title: Set(format!("Baseline note {index}")),
+                project_id: Set(None),
+                file_path: Set(None),
+                file_managed_by_app: Set(false),
+                cached_content: Set("x".repeat(4_096)),
+                file_missing_since: Set(None),
+                created_at: Set(1),
+                updated_at: Set(1),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await?;
+        }
+        crate::workspace::search::rebuild_search_index(&db).await?;
+        let target = note::Entity::find()
+            .filter(note::Column::Title.eq("Baseline note 0"))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("seeded note is missing"))?;
+        let started = std::time::Instant::now();
+        move_to_trash(
+            &db,
+            MoveToTrash {
+                kind: TrashItemKind::Note,
+                id: target.id as u32,
+            },
+            9,
+        )
+        .await?;
+        let elapsed = started.elapsed();
+        eprintln!("BASELINE move_to_trash elapsed_ms={}", elapsed.as_millis());
+        assert_eq!(load_trash(&db).await?.len(), 1);
+        Ok(())
+    }
+}

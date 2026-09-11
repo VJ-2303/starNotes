@@ -1,0 +1,10 @@
+/target
+target/agent-data/
+*.db
+*.env
+docs/
+notes
+/attachments/
+.aider*
+.cargo/
+.agents/

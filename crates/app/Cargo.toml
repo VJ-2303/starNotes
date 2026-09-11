@@ -1,0 +1,34 @@
+[package]
+name         = "app"
+version.workspace = true
+publish      = false
+edition.workspace = true
+
+[[bin]]
+name = "castle"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+reqwest_client.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml_edit.workspace = true
+chrono.workspace = true
+storage = { path = "../storage" }
+runtime = { path = "../runtime" }
+settings = { path = "../settings" }
+shell = { path = "../shell" }
+command_palette = { path = "../command_palette" }
+document_editor = { path = "../document_editor" }
+dotenvy = "0.15"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+storage = { path = "../storage", features = ["test-support"] }
+tempfile = "3.23"
+sea-orm.workspace = true
+migration = { path = "../migration" }
+entity = { path = "../entity" }

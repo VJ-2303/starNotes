@@ -1,0 +1,494 @@
+use anyhow::Result;
+use gpui_kit::{Context, SharedString, Window};
+
+use runtime::AppRuntime;
+use storage::time::unix_timestamp_seconds as now_ts;
+use storage::workspace::{home, trash};
+
+use super::{SidebarView, action::*, event::SidebarEvent, model::*};
+
+impl SidebarView {
+    pub(super) fn restore_trashed(
+        &mut self,
+        kind: trash::TrashItemKind,
+        id: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                trash::restore_item(
+                    &store,
+                    trash::RestoreTrashItem(trash::MoveToTrash { kind, id }),
+                )
+                .await
+            },
+        );
+        cx.spawn(async move |this, cx| -> Result<()> {
+            task.await??;
+            this.update(cx, |this, cx| {
+                this.request_workspace_refresh(cx);
+            })
+            .ok();
+            Ok(())
+        })
+        .detach();
+    }
+
+    pub(super) fn set_note_pinned(&mut self, note_id: u32, pinned: bool, cx: &mut Context<Self>) {
+        for note in self
+            .projects
+            .iter_mut()
+            .flat_map(|project| project.notes.iter_mut())
+            .chain(self.standalone_notes.iter_mut())
+        {
+            if note.id == note_id {
+                note.is_pinned = pinned;
+                break;
+            }
+        }
+        cx.notify();
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                home::set_pinned(&store, home::WorkspaceItemKind::Note, note_id, pinned).await
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => eprintln!("Failed to update pinned note: {err}"),
+                    Err(err) => eprintln!("Failed to join pinned note task: {err}"),
+                }
+                this.request_workspace_refresh(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn select_note(
+        &mut self,
+        note_id: u32,
+        project_id: Option<u32>,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_project_id = project_id;
+        self.active_item = Some(ActiveItem::Note(note_id));
+        cx.emit(SidebarEvent::OpenNote {
+            note_id,
+            project_id,
+            title,
+        });
+    }
+
+    pub(super) fn delete_note(
+        &mut self,
+        note_id: u32,
+        title: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                trash::move_to_trash(
+                    &store,
+                    trash::MoveToTrash {
+                        kind: trash::TrashItemKind::Note,
+                        id: note_id,
+                    },
+                    now_ts(),
+                )
+                .await
+            },
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let result = match task.await {
+                Ok(result) => result,
+                Err(err) => Err(anyhow::anyhow!(err)),
+            };
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    this.standalone_notes.retain(|note| note.id != note_id);
+                    for project in &mut this.projects {
+                        project.notes.retain(|note| note.id != note_id);
+                    }
+                    this.renaming_note = None;
+                    cx.emit(SidebarEvent::NoteDeleted { note_id });
+                    cx.emit(SidebarEvent::WorkspaceChanged);
+                    this.push_trash_undo(
+                        trash::TrashItemKind::Note,
+                        note_id,
+                        title.clone(),
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                }
+                Err(err) => {
+                    eprintln!("Failed to move note to Trash: {err}");
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn rename_note(&mut self, cx: &mut Context<Self>, note_id: u32, title: String) {
+        let shared_title = SharedString::from(title.as_str());
+
+        if let Some(note) = self
+            .projects
+            .iter_mut()
+            .flat_map(|project| project.notes.iter_mut())
+            .chain(self.standalone_notes.iter_mut())
+            .find(|note| note.id == note_id)
+        {
+            note.title = shared_title.clone();
+        }
+        cx.notify();
+
+        cx.emit(SidebarEvent::NoteRenamed {
+            note_id,
+            title: shared_title,
+        });
+
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                storage::workspace::persist_workspace_title(
+                    &store,
+                    storage::workspace::WorkspaceTitleTarget::Note(note_id),
+                    title,
+                )
+                .await
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(update)) => cx.emit(SidebarEvent::NotePathChanged {
+                    note_id,
+                    file_path: update.file_path,
+                }),
+                Ok(Err(err)) => {
+                    eprintln!("Failed to rename note: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+                Err(err) => {
+                    eprintln!("Failed to join note rename task: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn start_renaming_note(
+        &mut self,
+        action: &EditNoteAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(title) = self.find_note(action.0).map(|note| note.title.to_string()) else {
+            return;
+        };
+
+        self.renaming_note = Some(action.0);
+        self.rename_note_input.update(cx, |input, cx| {
+            input.set_value(title, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn move_note(
+        &mut self,
+        cx: &mut Context<Self>,
+        note_id: u32,
+        project_id: Option<u32>,
+    ) {
+        if self.find_note(note_id).and_then(|note| note.project_id) == project_id {
+            return;
+        }
+
+        let Some(mut note) = self.take_note(note_id) else {
+            return;
+        };
+        note.project_id = project_id;
+        if let Some(project_id) = project_id {
+            let Some(project) = self
+                .projects
+                .iter_mut()
+                .find(|project| project.id == project_id)
+            else {
+                self.standalone_notes.push(note);
+                return;
+            };
+            project.notes.push(note);
+            project.is_expanded = true;
+        } else {
+            self.standalone_notes.push(note);
+        }
+        if self.active_item == Some(ActiveItem::Note(note_id)) {
+            self.active_project_id = project_id;
+        }
+        cx.notify();
+
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                storage::workspace::move_note_to_project(&store, note_id, project_id).await
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(_)) => cx.emit(SidebarEvent::WorkspaceChanged),
+                Ok(Err(err)) => {
+                    eprintln!("Failed to move note: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+                Err(err) => {
+                    eprintln!("Failed to join note move task: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn take_note(&mut self, note_id: u32) -> Option<NoteItem> {
+        if let Some(index) = self
+            .standalone_notes
+            .iter()
+            .position(|note| note.id == note_id)
+        {
+            return Some(self.standalone_notes.remove(index));
+        }
+
+        self.projects.iter_mut().find_map(|project| {
+            project
+                .notes
+                .iter()
+                .position(|note| note.id == note_id)
+                .map(|index| project.notes.remove(index))
+        })
+    }
+
+    pub(super) fn start_renaming_project(
+        &mut self,
+        action: &RenameProjectAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(name) = self
+            .find_project(action.0)
+            .map(|project| project.name.to_string())
+        else {
+            return;
+        };
+
+        self.renaming_project = Some(action.0);
+        self.rename_project_input.update(cx, |input, cx| {
+            input.set_value(name, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn rename_project(&mut self, cx: &mut Context<Self>, project_id: u32, name: String) {
+        let shared_name = SharedString::from(name.as_str());
+
+        if let Some(project) = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        {
+            project.name = shared_name.clone();
+        }
+
+        cx.notify();
+        cx.emit(SidebarEvent::ProjectRenamed {
+            project_id,
+            name: shared_name,
+        });
+
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                storage::workspace::rename_project(&store, project_id, name).await
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => {
+                    eprintln!("Failed to rename project: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+                Err(err) => {
+                    eprintln!("Failed to join project rename task: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn delete_project(&mut self, cx: &mut Context<Self>, project_id: u32) {
+        let task = cx.global::<AppRuntime>().spawn_store(
+            cx.background_executor(),
+            move |store| async move {
+                trash::move_to_trash(
+                    &store,
+                    trash::MoveToTrash {
+                        kind: trash::TrashItemKind::Project,
+                        id: project_id,
+                    },
+                    now_ts(),
+                )
+                .await
+            },
+        );
+        cx.spawn(async move |this, cx| -> Result<()> {
+            task.await??;
+            this.update(cx, |this, cx| {
+                this.projects.retain(|project| project.id != project_id);
+                this.renaming_project = None;
+                if this.active_project_id == Some(project_id) {
+                    this.active_project_id = None;
+                    this.active_item = None;
+                }
+                this.request_workspace_refresh(cx);
+                cx.emit(SidebarEvent::ProjectDeleted { project_id });
+                cx.notify();
+            })
+            .ok();
+            Ok(())
+        })
+        .detach();
+    }
+
+    pub(super) fn move_project_up(&mut self, cx: &mut Context<Self>, project_id: u32) {
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return;
+        };
+
+        if index == 0 {
+            return;
+        }
+
+        self.projects.swap(index - 1, index);
+        self.persist_project_positions(cx);
+    }
+
+    pub(super) fn move_project_down(&mut self, cx: &mut Context<Self>, project_id: u32) {
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return;
+        };
+
+        if index + 1 >= self.projects.len() {
+            return;
+        }
+
+        self.projects.swap(index, index + 1);
+        self.persist_project_positions(cx);
+    }
+
+    pub(super) fn reorder_project(
+        &mut self,
+        source_project_id: u32,
+        target_project_id: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source_index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == source_project_id)
+        else {
+            return;
+        };
+        let Some(target_index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == target_project_id)
+        else {
+            return;
+        };
+        if source_index == target_index {
+            return;
+        }
+
+        let moving_down = source_index < target_index;
+        let project = self.projects.remove(source_index);
+        let target_index = self
+            .projects
+            .iter()
+            .position(|project| project.id == target_project_id)
+            .unwrap_or(self.projects.len());
+        let insertion_index = if moving_down {
+            target_index + 1
+        } else {
+            target_index
+        };
+        self.projects.insert(insertion_index, project);
+        self.persist_project_positions(cx);
+    }
+
+    fn persist_project_positions(&mut self, cx: &mut Context<Self>) {
+        let positions: Vec<(u32, i32)> = self
+            .projects
+            .iter_mut()
+            .enumerate()
+            .map(|(index, project)| {
+                project.position = index as i32;
+                (project.id, project.position)
+            })
+            .collect();
+
+        cx.notify();
+
+        let task = cx
+            .global::<AppRuntime>()
+            .spawn_store(cx.background_executor(), move |store| async move {
+                storage::workspace::reorder_projects(&store, positions).await
+            });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(())) => cx.emit(SidebarEvent::ProjectsReordered),
+                Ok(Err(err)) => {
+                    eprintln!("Failed to persist project positions: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+                Err(err) => {
+                    eprintln!("Failed to join project position task: {err}");
+                    this.request_workspace_refresh(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}

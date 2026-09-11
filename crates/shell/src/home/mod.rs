@@ -1,0 +1,573 @@
+use chrono::{Local, TimeZone as _};
+use gpui_kit::StatefulInteractiveElement as _;
+use gpui_kit::component::{
+    Icon, Selectable as _, WindowExt as _,
+    button::{Button, ButtonVariant, ButtonVariants as _},
+    dialog::DialogButtonProps,
+    input::Input,
+    scroll::ScrollableElement as _,
+};
+
+use super::*;
+use storage::workspace::home::{WorkspaceHomeItem, WorkspaceItemKind};
+use storage::workspace::trash::{MoveToTrash, PurgeTrashItem, PurgedArtifacts, RestoreTrashItem};
+
+mod loading;
+mod render;
+mod trash;
+
+fn remove_purged_artifacts(artifacts: PurgedArtifacts, attachments_dir: &std::path::Path) {
+    for path in artifacts.managed_files {
+        let _ = std::fs::remove_file(path);
+    }
+    for note_id in artifacts.attachment_note_ids {
+        let _ = std::fs::remove_dir_all(attachments_dir.join(note_id.to_string()));
+    }
+}
+
+fn section_title(
+    title: &'static str,
+    subtitle: &'static str,
+    cx: &mut Context<AppShell>,
+) -> impl IntoElement {
+    h_flex()
+        .items_end()
+        .justify_between()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(subtitle),
+        )
+}
+
+fn empty_state(
+    icon: IconName,
+    title: &'static str,
+    body: &'static str,
+    cx: &mut Context<AppShell>,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .p_6()
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().secondary.opacity(0.28))
+        .text_color(cx.theme().muted_foreground)
+        .child(Icon::new(icon).small())
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                .text_color(cx.theme().foreground)
+                .child(title),
+        )
+        .child(div().text_xs().child(body))
+}
+
+fn inline_retry(
+    error: SharedString,
+    retry: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &mut Context<AppShell>,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .justify_between()
+        .gap_3()
+        .p_3()
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().danger.opacity(0.08))
+        .text_sm()
+        .text_color(cx.theme().danger)
+        .child(error)
+        .child(
+            Button::new("retry-workspace-view")
+                .label("Retry")
+                .outline()
+                .small()
+                .on_click(retry),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use entity::note;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectOptions, Database, EntityTrait};
+    use std::{path::PathBuf, sync::Arc, time::Duration};
+
+    #[test]
+    fn purged_artifact_cleanup_keeps_active_note_attachments() -> anyhow::Result<()> {
+        let test_dir = std::env::temp_dir().join(format!(
+            "castle-purged-artifacts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let attachments_dir = test_dir.join("attachments");
+        let purged_note_dir = attachments_dir.join("41");
+        let active_note_dir = attachments_dir.join("42");
+        std::fs::create_dir_all(&purged_note_dir)?;
+        std::fs::create_dir_all(&active_note_dir)?;
+        std::fs::write(purged_note_dir.join("image.png"), b"purged")?;
+        std::fs::write(active_note_dir.join("image.png"), b"active")?;
+        let managed_file = test_dir.join("note.md");
+        std::fs::write(&managed_file, b"note")?;
+
+        remove_purged_artifacts(
+            PurgedArtifacts {
+                managed_files: vec![managed_file.clone()],
+                attachment_note_ids: vec![41],
+            },
+            &attachments_dir,
+        );
+
+        assert!(!managed_file.exists());
+        assert!(!purged_note_dir.exists());
+        assert!(active_note_dir.join("image.png").exists());
+        std::fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
+    #[gpui_kit::test]
+    fn rapid_tab_churn_keeps_database_and_views_responsive(cx: &mut gpui_kit::TestAppContext) {
+        let runtime = tokio::runtime::Runtime::new().expect("Tokio test runtime should start");
+        let _runtime_guard = runtime.enter();
+        cx.executor().allow_parking();
+
+        let database_path = std::env::temp_dir().join(format!(
+            "castle-tab-churn-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::File::create(&database_path).expect("test database file should be created");
+        let database_url = format!("sqlite:{}", database_path.display()).replace('\\', "/");
+
+        let (db, note_id, note_id_2) = runtime
+            .block_on(async {
+                let mut options = ConnectOptions::new(database_url);
+                options.max_connections(1).min_connections(1);
+                let db = Database::connect(options).await?;
+                Migrator::up(&db, None).await?;
+                let note_1 = note::ActiveModel {
+                    title: Set("Restored note 1".to_string()),
+                    project_id: Set(None),
+                    file_path: Set(None),
+                    file_managed_by_app: Set(false),
+                    cached_content: Set("# Restored content 1".to_string()),
+                    file_missing_since: Set(None),
+                    created_at: Set(1),
+                    updated_at: Set(1),
+                    ..Default::default()
+                }
+                .insert(&db)
+                .await?;
+                let note_2 = note::ActiveModel {
+                    title: Set("Restored note 2".to_string()),
+                    project_id: Set(None),
+                    file_path: Set(None),
+                    file_managed_by_app: Set(false),
+                    cached_content: Set("# Restored content 2".to_string()),
+                    file_missing_since: Set(None),
+                    created_at: Set(2),
+                    updated_at: Set(2),
+                    ..Default::default()
+                }
+                .insert(&db)
+                .await?;
+                Ok::<_, anyhow::Error>((db, note_1.id as u32, note_2.id as u32))
+            })
+            .expect("tab churn test setup should succeed");
+
+        let settings_dir = tempfile::tempdir().expect("settings directory should be created");
+        let db = Arc::new(db);
+        let held_connection = runtime
+            .block_on(db.get_sqlite_connection_pool().acquire())
+            .expect("test should reserve the SQLite connection");
+        let app_db = runtime::AppRuntime::new(db.clone(), PathBuf::new());
+        let mut shell = None;
+        let window = cx.update(|cx| {
+            cx.set_global(gpui_kit::component::Theme::default());
+            gpui_kit::init(cx);
+            cx.set_global(settings::AppSettings::load(settings_dir.path()));
+            cx.set_global(app_db);
+            cx.open_window(Default::default(), |window, cx| {
+                let view = AppShell::view(window, test_shell_integration(), cx);
+                shell = Some(view.clone());
+                cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
+            })
+            .expect("restore test window should open")
+        });
+        let shell = shell.expect("app shell should exist");
+        let mut cx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_note_tab(note_id, None, "Restored note 1".into(), window, cx);
+                shell.open_note_tab(note_id_2, None, "Restored note 2".into(), window, cx);
+            });
+        });
+        cx.run_until_parked();
+        shell.read_with(&cx, |shell, _| {
+            assert!(matches!(
+                shell.tabs.open_tabs[shell.tabs.active_tab_index].kind,
+                OpenTabKind::Note { .. }
+            ));
+        });
+        let (pending_note_view_1, pending_note_view_2) = shell.read_with(&cx, |shell, _| {
+            let note_1 = shell
+                .tabs
+                .open_tabs
+                .iter()
+                .find_map(|tab| match &tab.kind {
+                    OpenTabKind::Note { note_id: id, view, .. } if *id == note_id => Some(view.clone()),
+                    _ => None,
+                })
+                .expect("note 1 tab should have a view");
+            let note_2 = shell
+                .tabs
+                .open_tabs
+                .iter()
+                .find_map(|tab| match &tab.kind {
+                    OpenTabKind::Note { note_id: id, view, .. } if *id == note_id_2 => Some(view.clone()),
+                    _ => None,
+                })
+                .expect("note 2 tab should have a view");
+            (note_1, note_2)
+        });
+        for _ in 0..100 {
+            cx.update(|window, cx| {
+                pending_note_view_1
+                    .update(cx, |note, cx| note.reload_after_external_change(window, cx));
+                pending_note_view_2
+                    .update(cx, |note, cx| note.reload_after_external_change(window, cx));
+            });
+            cx.run_until_parked();
+        }
+        let closed_note_1 = pending_note_view_1.downgrade();
+        let closed_note_2 = pending_note_view_2.downgrade();
+        drop(pending_note_view_1);
+        drop(pending_note_view_2);
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.close_all_tabs(window, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            closed_note_2.upgrade().is_none(),
+            "closing note tabs must release their views"
+        );
+        assert!(
+            closed_note_1.upgrade().is_none(),
+            "closing note tabs must release their views"
+        );
+
+        for _ in 0..100 {
+            cx.update(|window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.open_note_tab(note_id, None, "Restored note 1".into(), window, cx);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.close_all_tabs(window, cx);
+                    shell.open_note_tab(note_id_2, None, "Restored note 2".into(), window, cx);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                shell.update(cx, |shell, cx| shell.close_all_tabs(window, cx));
+            });
+        }
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_note_tab(note_id, None, "Restored note 1".into(), window, cx);
+                shell.open_note_tab(note_id_2, None, "Restored note 2".into(), window, cx);
+            });
+        });
+        cx.run_until_parked();
+        drop(held_connection);
+
+        let (note_view_1, note_view_2) = shell.read_with(&cx, |shell, _| {
+            let note_view_1 = shell.tabs.open_tabs.iter().find_map(|tab| match &tab.kind {
+                OpenTabKind::Note { note_id: id, view, .. } if *id == note_id => Some(view.clone()),
+                _ => None,
+            });
+            let note_view_2 = shell.tabs.open_tabs.iter().find_map(|tab| match &tab.kind {
+                OpenTabKind::Note { note_id: id, view, .. } if *id == note_id_2 => Some(view.clone()),
+                _ => None,
+            });
+            (
+                note_view_1.expect("restored note 1 tab should exist"),
+                note_view_2.expect("restored note 2 tab should exist"),
+            )
+        });
+
+        for _ in 0..10_000 {
+            cx.run_until_parked();
+            let note_1_loaded = note_view_1
+                .read_with(&cx, |note, cx| note.loaded_content(cx))
+                .is_some();
+            let note_2_loaded = note_view_2
+                .read_with(&cx, |note, cx| note.loaded_content(cx))
+                .is_some();
+            if note_1_loaded && note_2_loaded {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        assert_eq!(
+            note_view_1.read_with(&cx, |note, cx| note.loaded_content(cx)),
+            Some("# Restored content 1".to_string())
+        );
+        assert_eq!(
+            note_view_2.read_with(&cx, |note, cx| note.loaded_content(cx)),
+            Some("# Restored content 2".to_string())
+        );
+
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(1), async {
+                entity::project::ActiveModel {
+                    name: Set("Created after restore".to_string()),
+                    archived: Set(false),
+                    position: Set(1),
+                    ..Default::default()
+                }
+                .insert(db.as_ref())
+                .await?;
+                Ok::<_, sea_orm::DbErr>(())
+            }))
+            .expect("database should remain responsive after tab churn")
+            .expect("post-churn writes should succeed");
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.refresh_workspace(cx);
+                if let Some(index) = shell.tabs.open_tabs.iter().position(
+                    |tab| matches!(tab.kind, OpenTabKind::Note { note_id: id, .. } if id == note_id_2),
+                ) {
+                    shell.close_tab(index, window, cx);
+                }
+                shell.open_note_tab(note_id_2, None, "Restored note 2".into(), window, cx);
+            });
+        });
+
+        for _ in 0..100 {
+            cx.run_until_parked();
+            let sidebar_has_project = shell.read_with(&cx, |shell, cx| {
+                shell
+                    .sidebar
+                    .read(cx)
+                    .contains_project_named("Created after restore")
+            });
+            if sidebar_has_project {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(shell.read_with(&cx, |shell, cx| {
+            shell
+                .sidebar
+                .read(cx)
+                .contains_project_named("Created after restore")
+        }));
+
+        cx.update(|window, cx| {
+            note_view_1.update(cx, |note, cx| {
+                note.replace_content_for_test("# Saved after close", window, cx);
+            });
+        });
+        assert_eq!(
+            note_view_1.read_with(&cx, |note, cx| note.loaded_content(cx)),
+            Some("# Saved after close".to_string())
+        );
+        assert_eq!(
+            note_view_1.read_with(&cx, |note, _| note.save_state()),
+            SaveState::Dirty
+        );
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| {
+                shell.tabs.note_views.get(&note_id).map(Entity::entity_id)
+            }),
+            Some(note_view_1.entity_id())
+        );
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                let note_index = shell
+                    .tabs
+                    .open_tabs
+                    .iter()
+                    .position(|tab| matches!(tab.kind, OpenTabKind::Note { .. }))
+                    .expect("note tab should still be open");
+                shell.close_tab(note_index, window, cx);
+            });
+        });
+        let closed_dirty_note = note_view_1.downgrade();
+        assert!(shell.read_with(&cx, |shell, _| shell.tabs.note_views.contains_key(&note_id)));
+        drop(note_view_1);
+        drop(note_view_2);
+        assert!(
+            closed_dirty_note.upgrade().is_some(),
+            "a dirty closed editor must stay alive until autosave finishes"
+        );
+
+        cx.executor().advance_clock(Duration::from_millis(1_300));
+        for _ in 0..150 {
+            cx.run_until_parked();
+            let persisted = runtime
+                .block_on(note::Entity::find_by_id(note_id as i64).one(db.as_ref()))
+                .ok()
+                .flatten()
+                .is_some_and(|note| note.cached_content == "# Saved after close");
+            if persisted && closed_dirty_note.upgrade().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let saved_content = runtime
+            .block_on(note::Entity::find_by_id(note_id as i64).one(db.as_ref()))
+            .expect("saved note query should succeed")
+            .expect("saved note should still exist")
+            .cached_content;
+        assert_eq!(saved_content, "# Saved after close");
+        assert!(
+            closed_dirty_note.upgrade().is_none(),
+            "a closed editor must be released after autosave succeeds"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn reopening_many_note_tabs_keeps_the_ui_executor_responsive(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().expect("Tokio test runtime should start");
+        let _runtime_guard = runtime.enter();
+        cx.executor().allow_parking();
+
+        let db = runtime
+            .block_on(async {
+                let mut options = ConnectOptions::new("sqlite::memory:");
+                options.max_connections(1).min_connections(1);
+                let db = Database::connect(options).await?;
+                Migrator::up(&db, None).await?;
+                for index in 0..15 {
+                    note::ActiveModel {
+                        title: Set(format!("Reopen note {index}")),
+                        project_id: Set(None),
+                        file_path: Set(None),
+                        file_managed_by_app: Set(false),
+                        cached_content: Set(format!("# Reopen note {index}")),
+                        file_missing_since: Set(None),
+                        created_at: Set(index),
+                        updated_at: Set(index),
+                        ..Default::default()
+                    }
+                    .insert(&db)
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(db)
+            })
+            .expect("many-note database setup should succeed");
+        let note_ids = runtime
+            .block_on(note::Entity::find().all(&db))
+            .expect("many-note rows should load")
+            .into_iter()
+            .map(|note| note.id as u32)
+            .collect::<Vec<_>>();
+        let app_db = runtime::AppRuntime::new(Arc::new(db), PathBuf::new());
+        let settings_dir = tempfile::tempdir().expect("settings directory should be created");
+
+        let mut shell = None;
+        let window = cx.update(|cx| {
+            cx.set_global(gpui_kit::component::Theme::default());
+            gpui_kit::init(cx);
+            cx.set_global(settings::AppSettings::load(settings_dir.path()));
+            cx.set_global(app_db);
+            cx.open_window(Default::default(), |window, cx| {
+                let view = AppShell::view(window, test_shell_integration(), cx);
+                shell = Some(view.clone());
+                cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
+            })
+            .expect("many-note test window should open")
+        });
+        let shell = shell.expect("app shell should exist");
+        let mut cx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+
+        for cycle in 0..2 {
+            cx.update(|window, cx| {
+                shell.update(cx, |shell, cx| {
+                    for note_id in &note_ids {
+                        shell.open_note_tab(
+                            *note_id,
+                            None,
+                            format!("Reopen note {note_id}").into(),
+                            window,
+                            cx,
+                        );
+                    }
+                });
+            });
+            assert_eq!(
+                shell.read_with(&cx, |shell, _| shell.tabs.open_tabs.len()),
+                note_ids.len(),
+                "cycle {cycle} should open every note tab"
+            );
+
+            cx.update(|window, cx| {
+                shell.update(cx, |shell, cx| shell.close_all_tabs(window, cx));
+            });
+            assert_eq!(
+                shell.read_with(&cx, |shell, _| shell.tabs.open_tabs.len()),
+                1,
+                "cycle {cycle} should leave only the chooser tab"
+            );
+        }
+
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                for note_id in &note_ids {
+                    shell.open_note_tab(
+                        *note_id,
+                        None,
+                        format!("Reopen note {note_id}").into(),
+                        window,
+                        cx,
+                    );
+                }
+            });
+        });
+        const MAX_EXECUTOR_TICKS: usize = 10_000;
+        let parked = (0..MAX_EXECUTOR_TICKS).any(|_| !cx.executor().tick());
+        assert!(
+            parked,
+            "executor kept making progress for {MAX_EXECUTOR_TICKS} ticks without quiescing"
+        );
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(
+            shell.read_with(&cx, |shell, _| shell.tabs.open_tabs.len()),
+            note_ids.len(),
+            "the final reopen should open every note tab"
+        );
+    }
+}

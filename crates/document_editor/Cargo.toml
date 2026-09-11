@@ -1,0 +1,36 @@
+[package]
+name = "document_editor"
+version.workspace = true
+publish = false
+edition.workspace = true
+
+[dependencies]
+gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+serde.workspace = true
+serde_json.workspace = true
+toml_edit.workspace = true
+image.workspace = true
+lsp-types.workspace = true
+chrono.workspace = true
+tree-sitter.workspace = true
+tree-sitter-json.workspace = true
+merman.workspace = true
+lol_html = "2.9"
+dprint-plugin-json = "0.22.1"
+dprint-plugin-markdown = "0.22.1"
+unicode-width = "0.2.2"
+storage = { path = "../storage" }
+runtime = { path = "../runtime" }
+settings = { path = "../settings" }
+workspace = { path = "../workspace" }
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+storage = { path = "../storage", features = ["test-support"] }
+tempfile = "3.23"
+sea-orm.workspace = true
+migration = { path = "../migration" }
+entity = { path = "../entity" }
+test_support = { path = "../test_support" }

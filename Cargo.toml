@@ -1,0 +1,60 @@
+[workspace]
+members = [
+    "crates/app",
+    "crates/runtime",
+    "crates/settings",
+    "crates/shell",
+    "crates/command_palette",
+    "crates/document_editor",
+    "crates/workspace",
+    "crates/storage",
+    "crates/test_support",
+    "crates/migration",
+    "crates/entity",
+]
+default-members = ["crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+gpui-kit = "0.6.1"
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.1" }
+sea-orm = { version = "2.0.2", features = [ "sqlx-sqlite", "runtime-tokio", "macros" ] }
+tokio = { version = "1.53.1", features = ["fs", "macros", "rt-multi-thread"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+tree-sitter = "0.26"
+tree-sitter-json = "0.24.8"
+schemars = "1.2"
+toml_edit = "0.25"
+image = "0.25.10"
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+merman = { git = "https://github.com/zed-industries/merman", tag = "v0.7.0-with-patches", default-features = false, features = ["render"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[profile.dev]
+lto = false
+incremental = true
+codegen-units = 32
+debug = 0
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+gpui-pre = { opt-level = 2 }
+gpui-pre-platform = { opt-level = 2 }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+debug = false
+incremental = false
+overflow-checks = false
+strip = true
+panic = "abort"
