@@ -128,11 +128,15 @@ jobs:
           VERSION="${{ needs.metadata.outputs.version }}"
           ARCH="${{ matrix.arch }}"
           BINARY="target/${{ matrix.target }}/release/castle"
-          mkdir -p dist
+          mkdir -p dist/package
 
-          cp "$BINARY" dist/castle
-          tar -czf "dist/Castle-$VERSION-linux-$ARCH.tar.gz" -C dist castle
-          rm dist/castle
+          cp "$BINARY" dist/package/castle
+          cp crates/app/assets/castle.desktop dist/package/castle.desktop
+          cp crates/app/assets/icon/castle-app-icon.png dist/package/castle.png
+
+          tar -czf "dist/Castle-$VERSION-linux-$ARCH.tar.gz" -C dist/package castle castle.desktop castle.png
+          rm -rf dist/package
+          cp install.sh dist/install.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -159,7 +163,7 @@ jobs:
       - name: Create checksums
         run: |
           cd release
-          sha256sum * | sort -k2 > SHA256SUMS.txt
+          sha256sum Castle-*.tar.gz | sort -k2 > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create or update GitHub release

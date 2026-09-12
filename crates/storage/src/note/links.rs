@@ -728,7 +728,7 @@ fn normalize_name(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use entity::{board, note, project};
+    use entity::{note, project};
     use migration::{Migrator, MigratorTrait};
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, EntityTrait};
 
@@ -834,28 +834,16 @@ mod tests {
         let db = Database::connect("sqlite::memory:").await?;
         Migrator::up(&db, None).await?;
         let source = create_note(&db, "Source", None).await?;
-        let board = board::ActiveModel {
-            title: Set("Roadmap".to_string()),
-            last_selected_view_id: Set(0),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await?;
-        let content = "before [[board:Roadmap|Roadmap]] after";
+        let target = create_note(&db, "Roadmap", None).await?;
+        let content = "before [[Roadmap]] after";
 
         index_note_links(&db, source.id, content, 1).await?;
         let links = load_note_links(&db, source.id).await?;
         assert!(links.unresolved.is_empty());
-        assert_eq!(
-            crate::workspace::links::load_note_workspace_links(&db, source.id)
-                .await?
-                .references
-                .len(),
-            1
-        );
+        assert_eq!(links.outbound.len(), 1);
 
-        board::ActiveModel {
-            id: Set(board.id),
+        note::ActiveModel {
+            id: Set(target.id),
             deleted_at: Set(Some(2)),
             ..Default::default()
         }
@@ -864,29 +852,15 @@ mod tests {
         index_note_links(&db, source.id, content, 2).await?;
         let links = load_note_links(&db, source.id).await?;
         assert_eq!(links.unresolved.len(), 1);
-        assert_eq!(
-            links.unresolved[0].target_kind,
-            Some(crate::workspace::links::WorkspaceItemKind::Board)
-        );
-        assert!(
-            crate::workspace::links::load_note_workspace_links(&db, source.id)
-                .await?
-                .references
-                .is_empty()
-        );
 
-        board::Entity::delete_by_id(board.id).exec(&db).await?;
+        note::Entity::delete_by_id(target.id).exec(&db).await?;
         index_note_links(&db, source.id, content, 3).await?;
         let links = load_note_links(&db, source.id).await?;
         assert_eq!(links.unresolved.len(), 1);
-        assert_eq!(
-            links.unresolved[0].target_kind,
-            Some(crate::workspace::links::WorkspaceItemKind::Board)
-        );
-        assert_eq!(links.unresolved[0].raw_target, "board:Roadmap");
+        assert_eq!(links.unresolved[0].raw_target, "Roadmap");
         assert_eq!(
             &content[links.unresolved[0].start_byte..links.unresolved[0].end_byte],
-            "[[board:Roadmap|Roadmap]]"
+            "[[Roadmap]]"
         );
         Ok(())
     }

@@ -77,7 +77,7 @@ impl Store {
             .min_connections(options.min_connections)
             .max_connections(options.max_connections);
         let db = Database::connect(connect_options).await?;
-        Migrator::up(&db, None).await?;
+        ensure_migrated(&db).await?;
         Ok(Self { db: Arc::new(db) })
     }
 
@@ -178,5 +178,144 @@ where
         self.db
             .transaction_with_config(callback, isolation_level, access_mode)
             .await
+    }
+}
+
+async fn ensure_migrated(db: &DatabaseConnection) -> Result<()> {
+    if should_reset_legacy_schema(db).await? {
+        reset_sqlite_database(db).await?;
+    }
+    match Migrator::up(db, None).await {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let msg = err.to_string();
+            if msg.contains("is missing, this migration has been applied")
+                || msg.contains("no such table")
+            {
+                reset_sqlite_database(db).await?;
+                Migrator::up(db, None).await?;
+                Ok(())
+            } else {
+                Err(err.into())
+            }
+        }
+    }
+}
+
+async fn should_reset_legacy_schema(db: &DatabaseConnection) -> Result<bool> {
+    let legacy_table = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('board', 'card', 'entry', 'saved_board_view', 'board_template', 'workflow', 'recurring_task')",
+        ))
+        .await?;
+    if legacy_table.is_some() {
+        return Ok(true);
+    }
+
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='seaql_migrations'",
+        ))
+        .await?;
+    if row.is_none() {
+        return Ok(false);
+    }
+    let legacy_rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT version FROM seaql_migrations WHERE version != 'm20260101_000001_initial_schema'",
+        ))
+        .await?;
+    Ok(!legacy_rows.is_empty())
+}
+
+async fn reset_sqlite_database(db: &DatabaseConnection) -> Result<()> {
+    db.execute_unprepared("PRAGMA foreign_keys = OFF;").await?;
+
+    let triggers = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name NOT LIKE 'sqlite_%'",
+        ))
+        .await?;
+    for row in triggers {
+        let name: String = row.try_get("", "name")?;
+        db.execute_unprepared(&format!("DROP TRIGGER IF EXISTS \"{name}\";")).await?;
+    }
+
+    let views = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT name FROM sqlite_master WHERE type='view' AND name NOT LIKE 'sqlite_%'",
+        ))
+        .await?;
+    for row in views {
+        let name: String = row.try_get("", "name")?;
+        db.execute_unprepared(&format!("DROP VIEW IF EXISTS \"{name}\";")).await?;
+    }
+
+    let tables = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        ))
+        .await?;
+    for row in tables {
+        let name: String = row.try_get("", "name")?;
+        db.execute_unprepared(&format!("DROP TABLE IF EXISTS \"{name}\";")).await?;
+    }
+
+    db.execute_unprepared("PRAGMA foreign_keys = ON;").await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ensure_migrated_fresh_database() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        ensure_migrated(&db).await?;
+        assert!(!should_reset_legacy_schema(&db).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ensure_migrated_resets_legacy_database() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        db.execute_unprepared(
+            "CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);",
+        )
+        .await?;
+        db.execute_unprepared(
+            "INSERT INTO seaql_migrations (version, applied_at) VALUES ('m20220101_000001_create_table', 1);",
+        )
+        .await?;
+        db.execute_unprepared("CREATE TABLE legacy_trash (id INTEGER PRIMARY KEY);")
+            .await?;
+
+        ensure_migrated(&db).await?;
+
+        let legacy_table = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_trash'",
+            ))
+            .await?;
+        assert!(legacy_table.is_none());
+
+        let note_table = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='note'",
+            ))
+            .await?;
+        assert!(note_table.is_some());
+
+        assert!(!should_reset_legacy_schema(&db).await?);
+        Ok(())
     }
 }

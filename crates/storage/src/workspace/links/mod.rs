@@ -2,35 +2,17 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, bail};
 use entity::{
-    board, board::Entity as Board, card, card::Entity as Card, entry, entry::Entity as Entry, note,
-    note::Entity as Note, note_alias, note_alias::Entity as NoteAlias, project,
-    project::Entity as Project, saved_board_view, saved_board_view::Entity as SavedBoardView,
-    workspace_link, workspace_link::Entity as WorkspaceLink, workspace_link_index_state,
+    note, note::Entity as Note, note_alias::Entity as NoteAlias, project,
+    project::Entity as Project, workspace_link, workspace_link::Entity as WorkspaceLink,
+    workspace_link_index_state,
     workspace_link_index_state::Entity as WorkspaceLinkIndexState, workspace_reference_alias,
     workspace_reference_alias::Entity as WorkspaceReferenceAliasEntity,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DbBackend,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
     TransactionSession, TransactionTrait,
 };
-#[cfg(test)]
-use std::cell::Cell;
-
-#[cfg(test)]
-thread_local! {
-    static WORKSPACE_VIEW_CATALOG_LOOKUP_COMPARISONS: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-fn reset_workspace_view_catalog_lookup_comparisons() {
-    WORKSPACE_VIEW_CATALOG_LOOKUP_COMPARISONS.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-fn workspace_view_catalog_lookup_comparisons() -> usize {
-    WORKSPACE_VIEW_CATALOG_LOOKUP_COMPARISONS.with(Cell::get)
-}
 mod model;
 mod reference;
 
@@ -39,7 +21,6 @@ pub use reference::*;
 
 const ORIGIN_MANUAL: &str = "manual";
 const ORIGIN_NOTE_WIKILINK: &str = "note_wikilink";
-const ORIGIN_ENTRY_WIKILINK: &str = "entry_wikilink";
 
 pub fn is_workspace_target(raw_target: &str) -> bool {
     parse_reference_target(raw_target)
@@ -59,69 +40,10 @@ pub fn resolve_workspace_item(
 }
 
 pub async fn load_existing_workspace_items(
-    db: &impl ConnectionTrait,
-    items: &[WorkspaceItemRef],
+    _db: &impl ConnectionTrait,
+    _items: &[WorkspaceItemRef],
 ) -> Result<HashSet<WorkspaceItemRef>> {
-    let ids = |kind| {
-        items
-            .iter()
-            .filter(|item| item.kind == kind)
-            .map(|item| item.id)
-            .collect::<Vec<_>>()
-    };
-    let mut existing = HashSet::new();
-    let board_ids = ids(WorkspaceItemKind::Board);
-    if !board_ids.is_empty() {
-        existing.extend(
-            Board::find()
-                .filter(board::Column::Id.is_in(board_ids))
-                .select_only()
-                .column(board::Column::Id)
-                .into_tuple::<i64>()
-                .all(db)
-                .await?
-                .into_iter()
-                .map(|id| WorkspaceItemRef {
-                    kind: WorkspaceItemKind::Board,
-                    id,
-                }),
-        );
-    }
-    let list_ids = ids(WorkspaceItemKind::List);
-    if !list_ids.is_empty() {
-        existing.extend(
-            Card::find()
-                .filter(card::Column::Id.is_in(list_ids))
-                .select_only()
-                .column(card::Column::Id)
-                .into_tuple::<i64>()
-                .all(db)
-                .await?
-                .into_iter()
-                .map(|id| WorkspaceItemRef {
-                    kind: WorkspaceItemKind::List,
-                    id,
-                }),
-        );
-    }
-    let card_ids = ids(WorkspaceItemKind::Card);
-    if !card_ids.is_empty() {
-        existing.extend(
-            Entry::find()
-                .filter(entry::Column::Id.is_in(card_ids))
-                .select_only()
-                .column(entry::Column::Id)
-                .into_tuple::<i64>()
-                .all(db)
-                .await?
-                .into_iter()
-                .map(|id| WorkspaceItemRef {
-                    kind: WorkspaceItemKind::Card,
-                    id,
-                }),
-        );
-    }
-    Ok(existing)
+    Ok(HashSet::new())
 }
 
 pub fn workspace_relation_signature(content: &str) -> Vec<String> {
@@ -188,62 +110,7 @@ pub async fn load_workspace_link_catalog(
         .into_tuple::<(i64, String, Option<i64>)>()
         .all(db)
         .await?;
-    let boards = Board::find()
-        .filter(board::Column::DeletedAt.is_null())
-        .select_only()
-        .column(board::Column::Id)
-        .column(board::Column::Title)
-        .column(board::Column::ProjectId)
-        .into_tuple::<(i64, String, Option<i64>)>()
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(|(_, _, project_id)| {
-            project_id.is_none_or(|project_id| projects.contains_key(&project_id))
-        })
-        .collect::<Vec<_>>();
-    let board_by_id = boards
-        .iter()
-        .map(|(id, title, project_id)| (*id, (title.clone(), *project_id)))
-        .collect::<HashMap<_, _>>();
-    let board_ids = board_by_id.keys().copied().collect::<Vec<_>>();
-    let lists = if board_ids.is_empty() {
-        Vec::new()
-    } else {
-        Card::find()
-            .filter(card::Column::DeletedAt.is_null())
-            .filter(card::Column::BoardId.is_in(board_ids))
-            .order_by_asc(card::Column::Position)
-            .select_only()
-            .column(card::Column::Id)
-            .column(card::Column::Title)
-            .column(card::Column::BoardId)
-            .into_tuple::<(i64, String, i64)>()
-            .all(db)
-            .await?
-    };
-    let list_by_id = lists
-        .iter()
-        .map(|(id, title, board_id)| (*id, (title.clone(), *board_id)))
-        .collect::<HashMap<_, _>>();
-    let list_ids = list_by_id.keys().copied().collect::<Vec<_>>();
-    let cards = if list_ids.is_empty() {
-        Vec::new()
-    } else {
-        Entry::find()
-            .filter(entry::Column::DeletedAt.is_null())
-            .filter(entry::Column::CardId.is_in(list_ids))
-            .order_by_asc(entry::Column::Position)
-            .select_only()
-            .column(entry::Column::Id)
-            .column(entry::Column::Title)
-            .column(entry::Column::CardId)
-            .into_tuple::<(i64, String, i64)>()
-            .all(db)
-            .await?
-    };
-
-    let mut catalog = Vec::with_capacity(notes.len() + boards.len() + lists.len() + cards.len());
+    let mut catalog = Vec::with_capacity(notes.len());
     for (note_id, note_title, project_id) in notes {
         if project_id.is_some_and(|project_id| !projects.contains_key(&project_id)) {
             continue;
@@ -262,60 +129,6 @@ pub async fn load_workspace_link_catalog(
             list_title: None,
         });
     }
-    for (board_id, board_title, project_id) in &boards {
-        catalog.push(WorkspaceCatalogEntry {
-            item: WorkspaceItemRef {
-                kind: WorkspaceItemKind::Board,
-                id: *board_id,
-            },
-            title: board_title.clone(),
-            project_id: *project_id,
-            project_name: project_id.and_then(|project_id| projects.get(&project_id).cloned()),
-            board_id: Some(*board_id),
-            board_title: Some(board_title.clone()),
-            list_id: None,
-            list_title: None,
-        });
-    }
-    for (list_id, list_title, board_id) in &lists {
-        let Some((board_title, project_id)) = board_by_id.get(board_id) else {
-            continue;
-        };
-        catalog.push(WorkspaceCatalogEntry {
-            item: WorkspaceItemRef {
-                kind: WorkspaceItemKind::List,
-                id: *list_id,
-            },
-            title: list_title.clone(),
-            project_id: *project_id,
-            project_name: project_id.and_then(|project_id| projects.get(&project_id).cloned()),
-            board_id: Some(*board_id),
-            board_title: Some(board_title.clone()),
-            list_id: Some(*list_id),
-            list_title: Some(list_title.clone()),
-        });
-    }
-    for (card_id, card_title, list_id) in cards {
-        let Some((list_title, board_id)) = list_by_id.get(&list_id) else {
-            continue;
-        };
-        let Some((board_title, project_id)) = board_by_id.get(board_id) else {
-            continue;
-        };
-        catalog.push(WorkspaceCatalogEntry {
-            item: WorkspaceItemRef {
-                kind: WorkspaceItemKind::Card,
-                id: card_id,
-            },
-            title: card_title,
-            project_id: *project_id,
-            project_name: project_id.and_then(|project_id| projects.get(&project_id).cloned()),
-            board_id: Some(*board_id),
-            board_title: Some(board_title.clone()),
-            list_id: Some(list_id),
-            list_title: Some(list_title.clone()),
-        });
-    }
     Ok(catalog)
 }
 
@@ -325,23 +138,7 @@ pub async fn load_workspace_reference_catalog(
     db: &impl ConnectionTrait,
 ) -> Result<WorkspaceReferenceCatalog> {
     let items = load_workspace_link_catalog(db).await?;
-    let board_ids = items
-        .iter()
-        .filter(|entry| entry.item.kind == WorkspaceItemKind::Board)
-        .map(|entry| entry.item.id)
-        .collect::<Vec<_>>();
-    let boards = if board_ids.is_empty() {
-        Vec::new()
-    } else {
-        SavedBoardView::find()
-            .filter(saved_board_view::Column::BoardId.is_in(board_ids))
-            .filter(saved_board_view::Column::DeletedAt.is_null())
-            .order_by_asc(saved_board_view::Column::Position)
-            .order_by_asc(saved_board_view::Column::Id)
-            .all(db)
-            .await?
-    };
-    let views = build_workspace_view_catalog(&items, boards);
+    let views = build_workspace_view_catalog(&items);
     let aliases = WorkspaceReferenceAliasEntity::find()
         .all(db)
         .await?
@@ -390,35 +187,9 @@ pub async fn load_workspace_reference_catalog(
 }
 
 fn build_workspace_view_catalog(
-    items: &[WorkspaceCatalogEntry],
-    boards: Vec<saved_board_view::Model>,
+    _items: &[WorkspaceCatalogEntry],
 ) -> Vec<WorkspaceViewCatalogEntry> {
-    let mut board_by_id = HashMap::new();
-    for entry in items {
-        #[cfg(test)]
-        WORKSPACE_VIEW_CATALOG_LOOKUP_COMPARISONS
-            .with(|count| count.set(count.get().saturating_add(1)));
-
-        if entry.item.kind == WorkspaceItemKind::Board {
-            board_by_id.entry(entry.item.id).or_insert(entry);
-        }
-    }
-    boards
-        .into_iter()
-        .map(|view| {
-            let (project_id, project_name) = match board_by_id.get(&view.board_id) {
-                Some(entry) => (entry.project_id, entry.project_name.clone()),
-                None => (None, None),
-            };
-            WorkspaceViewCatalogEntry {
-                id: view.id,
-                board_id: view.board_id,
-                name: view.name,
-                project_id,
-                project_name,
-            }
-        })
-        .collect()
+    Vec::new()
 }
 
 pub async fn record_reference_alias(
@@ -548,58 +319,6 @@ pub(crate) async fn set_manual_note_link_in_connection(
     Ok(changed)
 }
 
-pub async fn create_card_from_note_selection(
-    db: &(impl ConnectionTrait + TransactionTrait),
-    note_id: i64,
-    list_id: i64,
-    title: String,
-    created_at: i64,
-) -> Result<CreatedLinkedCard> {
-    let title = title.trim();
-    if title.is_empty() {
-        bail!("card title must not be empty");
-    }
-    let catalog = load_workspace_link_catalog(db).await?;
-    catalog_entry(&catalog, WorkspaceItemKind::Note, note_id)
-        .with_context(|| format!("active note {note_id} was not found"))?;
-    let list = catalog_entry(&catalog, WorkspaceItemKind::List, list_id)
-        .with_context(|| format!("active list {list_id} was not found"))?;
-    let board_id = list
-        .board_id
-        .with_context(|| format!("list {list_id} has no active board"))?;
-    let position = Entry::find()
-        .filter(entry::Column::CardId.eq(list_id))
-        .filter(entry::Column::DeletedAt.is_null())
-        .count(db)
-        .await? as i32;
-    let txn = db.begin().await?;
-    let entry = entry::ActiveModel {
-        title: Set(title.to_string()),
-        description: Set(String::new()),
-        card_id: Set(list_id),
-        position: Set(position),
-        ..Default::default()
-    }
-    .insert(&txn)
-    .await?;
-    workspace_link::ActiveModel {
-        source_note_id: Set(Some(note_id)),
-        target_entry_id: Set(Some(entry.id)),
-        origin: Set(ORIGIN_MANUAL.to_string()),
-        ordinal: Set(0),
-        created_at: Set(created_at),
-        ..Default::default()
-    }
-    .insert(&txn)
-    .await?;
-    update_index_state(&txn, "entry", entry.id, "").await?;
-    txn.commit().await?;
-    Ok(CreatedLinkedCard {
-        entry_id: entry.id,
-        board_id,
-        list_id,
-    })
-}
 
 pub async fn unlink_note_from_item(
     db: &(impl ConnectionTrait + TransactionTrait),
@@ -748,100 +467,6 @@ pub(crate) async fn index_note_workspace_links_with_catalog(
     Ok(())
 }
 
-pub async fn index_entry_workspace_links(
-    db: &(impl ConnectionTrait + TransactionTrait),
-    entry_id: i64,
-    description: &str,
-    indexed_at: i64,
-) -> Result<()> {
-    let txn = db.begin().await?;
-    index_entry_workspace_links_in_connection(&txn, entry_id, description, indexed_at).await?;
-    txn.commit().await?;
-    Ok(())
-}
-
-pub async fn index_entry_workspace_links_in_connection(
-    db: &impl ConnectionTrait,
-    entry_id: i64,
-    description: &str,
-    indexed_at: i64,
-) -> Result<()> {
-    let catalog = load_workspace_reference_catalog(db).await?;
-    let aliases = NoteAlias::find().all(db).await?;
-
-    index_entry_workspace_links_with_catalog(
-        db,
-        entry_id,
-        description,
-        indexed_at,
-        &catalog,
-        &aliases,
-    )
-    .await
-}
-
-pub(crate) async fn index_entry_workspace_links_with_catalog(
-    db: &impl ConnectionTrait,
-    entry_id: i64,
-    description: &str,
-    indexed_at: i64,
-    catalog: &WorkspaceReferenceCatalog,
-    aliases: &[note_alias::Model],
-) -> Result<()> {
-    let source = catalog
-        .items
-        .iter()
-        .find(|entry| {
-            entry.item
-                == (WorkspaceItemRef {
-                    kind: WorkspaceItemKind::Card,
-                    id: entry_id,
-                })
-        })
-        .with_context(|| format!("active card {entry_id} was not found"))?;
-    let parsed = crate::note::links::parse_wikilinks(description);
-    let mut existing_wikilinks =
-        existing_bindings(db, None, Some(entry_id), ORIGIN_ENTRY_WIKILINK).await?;
-    WorkspaceLink::delete_many()
-        .filter(workspace_link::Column::SourceEntryId.eq(entry_id))
-        .filter(workspace_link::Column::Origin.eq(ORIGIN_ENTRY_WIKILINK))
-        .exec(db)
-        .await?;
-    for (ordinal, link) in parsed.into_iter().enumerate() {
-        let key = normalize_reference_key(&link.raw_target);
-        let had_existing_binding = existing_wikilinks.contains_key(&key);
-        let target = take_existing_binding(&mut existing_wikilinks, &key, catalog)
-            .map(|(target, _)| target)
-            .or_else(|| {
-                (!had_existing_binding)
-                    .then(|| resolve_workspace_item(&link.raw_target, catalog).ok())
-                    .flatten()
-            })
-            .or_else(|| {
-                if had_existing_binding {
-                    return None;
-                }
-                resolve_note_target(&link.raw_target, source.project_id, &catalog.items, aliases)
-                    .map(|entry| entry.item)
-            });
-        let Some(target) = target else {
-            continue;
-        };
-        let mut model = target_active_model(target);
-        model.source_entry_id = Set(Some(entry_id));
-        model.origin = Set(ORIGIN_ENTRY_WIKILINK.to_string());
-        model.ordinal = Set(ordinal as i32);
-        model.raw_target = Set(Some(link.raw_target));
-        model.display_text = Set(link.display_text);
-        model.start_byte = Set(Some(link.start_byte as i64));
-        model.end_byte = Set(Some(link.end_byte as i64));
-        model.line_number = Set(Some(link.line_number as i32));
-        model.created_at = Set(indexed_at);
-        model.insert(db).await?;
-    }
-    update_index_state(db, "entry", entry_id, description).await?;
-    Ok(())
-}
 
 pub async fn load_related_notes(
     db: &(impl ConnectionTrait + TransactionTrait),
@@ -1084,36 +709,10 @@ pub async fn reindex_stale_note_workspace_links(
 }
 
 pub async fn reindex_stale_entry_links(
-    db: &(impl ConnectionTrait + TransactionTrait),
-    limit: u64,
+    _db: &(impl ConnectionTrait + TransactionTrait),
+    _limit: u64,
 ) -> Result<usize> {
-    let rows = db
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            r#"
-            SELECT e.id, e.description
-            FROM entry e
-            JOIN card c ON c.id = e.card_id AND c.deleted_at IS NULL
-            JOIN board b ON b.id = c.board_id AND b.deleted_at IS NULL
-            LEFT JOIN project p ON p.id = b.project_id
-            LEFT JOIN workspace_link_index_state s
-              ON s.source_kind = 'entry' AND s.source_id = e.id
-            WHERE e.deleted_at IS NULL
-              AND (b.project_id IS NULL OR (p.deleted_at IS NULL AND p.archived = 0))
-              AND (s.source_id IS NULL OR s.indexed_content != e.description)
-            ORDER BY e.id
-            LIMIT ?
-            "#,
-            [(limit.max(1) as i64).into()],
-        ))
-        .await?;
-    let count = rows.len();
-    for row in rows {
-        let entry_id = row.try_get::<i64>("", "id")?;
-        let description = row.try_get::<String>("", "description")?;
-        index_entry_workspace_links(db, entry_id, &description, 0).await?;
-    }
-    Ok(count)
+    Ok(0)
 }
 
 pub async fn repair_workspace_link_index_batch(
@@ -1204,47 +803,8 @@ pub async fn repair_workspace_link_index_batch(
         txn.commit().await?;
     }
 
-    let remaining = remaining.saturating_sub(indexed_workspace_notes as u64);
-    let entry_rows = if remaining == 0 {
-        Vec::new()
-    } else {
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            r#"
-            SELECT e.id, e.description
-            FROM entry e
-            JOIN card c ON c.id = e.card_id AND c.deleted_at IS NULL
-            JOIN board b ON b.id = c.board_id AND b.deleted_at IS NULL
-            LEFT JOIN project p ON p.id = b.project_id
-            LEFT JOIN workspace_link_index_state s
-              ON s.source_kind = 'entry' AND s.source_id = e.id
-            WHERE e.deleted_at IS NULL
-              AND (b.project_id IS NULL OR (p.deleted_at IS NULL AND p.archived = 0))
-              AND (s.source_id IS NULL OR s.indexed_content != e.description)
-            ORDER BY e.id
-            LIMIT ?
-            "#,
-            [(remaining as i64).into()],
-        ))
-        .await?
-    };
-    let indexed_entries = entry_rows.len();
-    for row in entry_rows {
-        let entry_id = row.try_get::<i64>("", "id")?;
-        let description = row.try_get::<String>("", "description")?;
-        let txn = db.begin().await?;
-        index_entry_workspace_links_with_catalog(
-            &txn,
-            entry_id,
-            &description,
-            0,
-            &workspace_catalog,
-            &aliases,
-        )
-        .await?;
-        txn.commit().await?;
-    }
-    let indexed_total = indexed_notes + indexed_workspace_notes + indexed_entries;
+    let indexed_entries = 0;
+    let indexed_total = indexed_notes + indexed_workspace_notes;
     Ok(WorkspaceLinkRepairBatch {
         indexed_notes,
         indexed_workspace_notes,
@@ -1431,97 +991,7 @@ fn link_origin(origin: &str) -> WorkspaceLinkOrigin {
     }
 }
 
-fn resolve_note_target<'a>(
-    raw_target: &str,
-    source_project_id: Option<i64>,
-    catalog: &'a [WorkspaceCatalogEntry],
-    aliases: &[note_alias::Model],
-) -> Option<&'a WorkspaceCatalogEntry> {
-    if let Some(reference) = parse_reference_target(raw_target) {
-        if reference.kind != WorkspaceItemKind::Note {
-            return None;
-        }
-        let target = catalog.iter().filter(|entry| {
-            entry.item.kind == WorkspaceItemKind::Note
-                && note_path_matches(entry, &reference.segments)
-        });
-        if let Some(entry) = unique_entry(target) {
-            return Some(entry);
-        }
-        let alias = reference.segments.last().map(|segment| normalize(segment));
-        let alias_ids = aliases
-            .iter()
-            .filter(|candidate| alias.as_deref() == Some(candidate.normalized_alias.as_str()))
-            .map(|candidate| candidate.note_id)
-            .collect::<HashSet<_>>();
-        return (alias_ids.len() == 1)
-            .then(|| {
-                alias_ids
-                    .into_iter()
-                    .next()
-                    .and_then(|note_id| catalog_entry(catalog, WorkspaceItemKind::Note, note_id))
-            })
-            .flatten();
-    }
-    if let Some((project_name, title)) = raw_target.split_once('/') {
-        let project = normalize(project_name);
-        let title = normalize(title);
-        return unique_entry(catalog.iter().filter(|entry| {
-            entry.item.kind == WorkspaceItemKind::Note
-                && normalize(&entry.title) == title
-                && entry
-                    .project_name
-                    .as_deref()
-                    .is_some_and(|name| normalize(name) == project)
-        }));
-    }
-    let target = normalize(raw_target);
-    if let Some(entry) = unique_entry(catalog.iter().filter(|entry| {
-        entry.item.kind == WorkspaceItemKind::Note
-            && entry.project_id == source_project_id
-            && normalize(&entry.title) == target
-    })) {
-        return Some(entry);
-    }
-    if let Some(entry) = unique_entry(catalog.iter().filter(|entry| {
-        entry.item.kind == WorkspaceItemKind::Note && normalize(&entry.title) == target
-    })) {
-        return Some(entry);
-    }
-    let alias_ids = aliases
-        .iter()
-        .filter(|alias| alias.normalized_alias == target)
-        .map(|alias| alias.note_id)
-        .collect::<HashSet<_>>();
-    (alias_ids.len() == 1)
-        .then(|| {
-            alias_ids
-                .into_iter()
-                .next()
-                .and_then(|note_id| catalog_entry(catalog, WorkspaceItemKind::Note, note_id))
-        })
-        .flatten()
-}
 
-fn note_path_matches(entry: &WorkspaceCatalogEntry, segments: &[String]) -> bool {
-    let mut path = Vec::new();
-    if let Some(project) = entry.project_name.as_ref() {
-        path.push(project.as_str());
-    }
-    path.push(entry.title.as_str());
-    segments.len() <= path.len()
-        && path[path.len() - segments.len()..]
-            .iter()
-            .zip(segments)
-            .all(|(current, requested)| normalize(current) == normalize(requested))
-}
-
-fn unique_entry<'a>(
-    mut entries: impl Iterator<Item = &'a WorkspaceCatalogEntry>,
-) -> Option<&'a WorkspaceCatalogEntry> {
-    let first = entries.next()?;
-    entries.next().is_none().then_some(first)
-}
 
 fn catalog_entry(
     catalog: &[WorkspaceCatalogEntry],

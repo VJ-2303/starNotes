@@ -27,11 +27,8 @@ async fn main() -> Result<()> {
 
     let store = Store::connect(StoreOptions::new(paths.database_url)).await?;
 
-    let first_run_workspace = if is_fresh_database {
-        storage::workspace::onboarding::seed_fresh_workspace(&store, &paths.data_dir).await?
-    } else {
-        None
-    };
+    let first_run_workspace =
+        storage::workspace::onboarding::seed_fresh_workspace(&store, &paths.data_dir).await?;
 
     let mut settings = AppSettings::load(&paths.data_dir);
     let app_runtime = AppRuntime::new(store.clone(), paths.data_dir);

@@ -14,6 +14,19 @@ REPO="VJ-2303/starNotes"
 BINARY_NAME="castle"
 INSTALL_DIR="${CASTLE_INSTALL_DIR:-$HOME/.local/bin}"
 
+# Determine application and icon directories
+if [[ "$INSTALL_DIR" =~ ^/usr(/local)?/bin ]]; then
+  DATA_DIR="${INSTALL_DIR%/bin}/share"
+  DESKTOP_DIR="$DATA_DIR/applications"
+  ICON_DIR="$DATA_DIR/icons/hicolor/512x512/apps"
+  PIXMAPS_DIR="$DATA_DIR/pixmaps"
+else
+  DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+  DESKTOP_DIR="$DATA_HOME/applications"
+  ICON_DIR="$DATA_HOME/icons/hicolor/512x512/apps"
+  PIXMAPS_DIR="$DATA_HOME/pixmaps"
+fi
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; RESET='\033[0m'
 
@@ -68,7 +81,6 @@ curl -fSL --progress-bar "$URL" -o "$TMP_DIR/$ARCHIVE"
 info "Verifying checksum..."
 CHECKSUMS_FILE="$TMP_DIR/SHA256SUMS.txt"
 if curl -fsSL "$CHECKSUMS_URL" -o "$CHECKSUMS_FILE" 2>/dev/null; then
-  # Filter to just the line for our archive and verify
   EXPECTED=$(grep " $ARCHIVE$" "$CHECKSUMS_FILE" | awk '{print $1}')
   if [ -n "$EXPECTED" ]; then
     ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
@@ -83,7 +95,7 @@ else
   warn "Could not fetch SHA256SUMS.txt — skipping verification."
 fi
 
-# ── Extract and install ───────────────────────────────────────────────────────
+# ── Extract and install binary ────────────────────────────────────────────────
 info "Extracting..."
 tar -xzf "$TMP_DIR/$ARCHIVE" -C "$TMP_DIR"
 
@@ -92,11 +104,60 @@ EXTRACTED="$TMP_DIR/$BINARY_NAME"
 
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$EXTRACTED" "$INSTALL_DIR/$BINARY_NAME"
-
-# ── PATH hint ─────────────────────────────────────────────────────────────────
 INSTALLED_AT="$INSTALL_DIR/$BINARY_NAME"
-success "Castle $TAG installed → $INSTALLED_AT"
+success "Binary installed → $INSTALLED_AT"
 
+# ── Install App Icon ──────────────────────────────────────────────────────────
+ICON_SRC="$TMP_DIR/castle.png"
+if [ ! -f "$ICON_SRC" ]; then
+  # Fallback: download app icon directly if not packaged inside older archive
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/crates/app/assets/icon/castle-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
+    || curl -fsSL "https://raw.githubusercontent.com/$REPO/main/crates/app/assets/icon/castle-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
+    || true
+fi
+
+if [ -f "$ICON_SRC" ]; then
+  mkdir -p "$ICON_DIR" "$PIXMAPS_DIR"
+  install -m 644 "$ICON_SRC" "$ICON_DIR/castle.png"
+  install -m 644 "$ICON_SRC" "$PIXMAPS_DIR/castle.png"
+  success "Icon installed → $ICON_DIR/castle.png"
+else
+  warn "Could not acquire icon; continuing without desktop icon."
+fi
+
+# ── Install .desktop Configuration ────────────────────────────────────────────
+mkdir -p "$DESKTOP_DIR"
+DESKTOP_FILE="$DESKTOP_DIR/castle.desktop"
+
+cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Castle
+GenericName=Note-Taking & Workspace
+Comment=Fast, modern note-taking and workspace app for Linux
+Exec=$INSTALLED_AT %F
+Icon=castle
+Terminal=false
+Categories=Office;Utility;TextEditor;
+MimeType=text/plain;text/markdown;
+StartupWMClass=castle
+Keywords=notes;markdown;editor;kanban;docs;
+EOF
+
+chmod 644 "$DESKTOP_FILE"
+success "Desktop entry installed → $DESKTOP_FILE"
+
+# ── Refresh Desktop Databases ─────────────────────────────────────────────────
+if command -v update-desktop-database &>/dev/null; then
+  update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+fi
+
+ICON_THEME_ROOT="$(dirname "$(dirname "$ICON_DIR")")"
+if command -v gtk-update-icon-cache &>/dev/null && [ -d "$ICON_THEME_ROOT" ]; then
+  gtk-update-icon-cache -f -q -t "$ICON_THEME_ROOT" 2>/dev/null || true
+fi
+
+# ── PATH verification ─────────────────────────────────────────────────────────
 if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then
   echo ""
   warn "$INSTALL_DIR is not in your PATH."
@@ -107,4 +168,5 @@ if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then
 fi
 
 echo ""
-info "Run 'castle' to start."
+success "Castle $TAG installation complete!"
+info "You can launch Castle from your application menu or run 'castle'."

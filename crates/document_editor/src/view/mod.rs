@@ -586,10 +586,10 @@ fn save_state_status(
             cx.theme().warning,
             "File missing".into(),
         ),
-        SaveState::Error(_) => (
+        SaveState::Error(err) => (
             IconName::TriangleAlert,
             cx.theme().danger,
-            "Save failed".into(),
+            format!("Save failed: {err}").into(),
         ),
     }
 }

@@ -8,14 +8,12 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use entity::{
-    board, board_label, board_property, board_property_option, board_template, card, entry,
-    entry_attachment, entry_checklist_item, entry_label, entry_property_value, note, note_alias,
-    note_link, note_link_index_state, project, saved_board_view, workspace_link,
+    note, note_alias, note_link, note_link_index_state, project, workspace_link,
     workspace_link_index_state, workspace_reference_alias,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseTransaction,
-    DbBackend, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -32,29 +30,7 @@ enum ListWorkflowRole {
     Cancelled,
 }
 
-impl ListWorkflowRole {
-    fn from_storage(value: &str) -> Self {
-        match value {
-            "inbox" => Self::Inbox,
-            "todo" => Self::Todo,
-            "in_progress" => Self::InProgress,
-            "done" => Self::Done,
-            "cancelled" => Self::Cancelled,
-            _ => Self::Neutral,
-        }
-    }
 
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Neutral => "neutral",
-            Self::Inbox => "inbox",
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::Done => "done",
-            Self::Cancelled => "cancelled",
-        }
-    }
-}
 
 pub const WORKSPACE_ARCHIVE_FORMAT: &str = "castle-workspace";
 pub const WORKSPACE_ARCHIVE_VERSION: u32 = 1;
@@ -493,57 +469,8 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
         .order_by_asc(project::Column::Id)
         .all(db)
         .await?;
-    let boards = board::Entity::find()
-        .order_by_asc(board::Column::Id)
-        .all(db)
-        .await?;
-    let lists = card::Entity::find()
-        .order_by_asc(card::Column::Id)
-        .all(db)
-        .await?;
-    let entries = entry::Entity::find()
-        .order_by_asc(entry::Column::Id)
-        .all(db)
-        .await?;
     let notes = note::Entity::find()
         .order_by_asc(note::Column::Id)
-        .all(db)
-        .await?;
-    let board_labels = board_label::Entity::find()
-        .order_by_asc(board_label::Column::Id)
-        .all(db)
-        .await?;
-    let entry_labels = entry_label::Entity::find()
-        .order_by_asc(entry_label::Column::Id)
-        .all(db)
-        .await?;
-    let entry_attachments = entry_attachment::Entity::find()
-        .order_by_asc(entry_attachment::Column::Id)
-        .all(db)
-        .await?;
-    let checklist_items = entry_checklist_item::Entity::find()
-        .order_by_asc(entry_checklist_item::Column::Id)
-        .all(db)
-        .await?;
-    let board_properties = board_property::Entity::find()
-        .order_by_asc(board_property::Column::Id)
-        .all(db)
-        .await?;
-    let property_options = board_property_option::Entity::find()
-        .order_by_asc(board_property_option::Column::Id)
-        .all(db)
-        .await?;
-    let property_values = entry_property_value::Entity::find()
-        .order_by_asc(entry_property_value::Column::EntryId)
-        .order_by_asc(entry_property_value::Column::PropertyId)
-        .all(db)
-        .await?;
-    let saved_views = saved_board_view::Entity::find()
-        .order_by_asc(saved_board_view::Column::Id)
-        .all(db)
-        .await?;
-    let templates = board_template::Entity::find()
-        .order_by_asc(board_template::Column::Id)
         .all(db)
         .await?;
     let note_aliases = note_alias::Entity::find()
@@ -563,33 +490,6 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
         .order_by_asc(workspace_reference_alias::Column::Id)
         .all(db)
         .await?;
-    let recurring_tasks = db
-        .query_all_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "SELECT id, entry_id, rule_json, next_on, until_on, enabled, created_at, updated_at FROM recurring_task ORDER BY id",
-        ))
-        .await?
-        .into_iter()
-        .map(archive_recurring_task_from_row)
-        .collect::<Result<Vec<_>>>()?;
-    let workflows = db
-        .query_all_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "SELECT id, board_id, name, enabled, definition_json, created_at, updated_at FROM workflow ORDER BY id",
-        ))
-        .await?
-        .into_iter()
-        .map(archive_workflow_from_row)
-        .collect::<Result<Vec<_>>>()?;
-    let workflow_runs = db
-        .query_all_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "SELECT id, workflow_id, board_id, entry_id, trigger_kind, status, actions_json, error, started_at, finished_at FROM workflow_run ORDER BY id",
-        ))
-        .await?
-        .into_iter()
-        .map(archive_workflow_run_from_row)
-        .collect::<Result<Vec<_>>>()?;
 
     let note_attachments = notes
         .iter()
@@ -599,40 +499,7 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
         .flatten()
         .collect::<Vec<_>>();
 
-    let mut used_entry_file_names = HashMap::<i64, HashSet<String>>::new();
-    let archive_entry_attachments = entry_attachments
-        .iter()
-        .map(|attachment| {
-            let used_names = used_entry_file_names
-                .entry(attachment.entry_id)
-                .or_default();
-            let file_name = unique_portable_file_name(&attachment.file_name, used_names);
-            let archive_path = if validate_file_name(&attachment.file_name).is_ok() {
-                let source_path = data_dir
-                    .join("attachments")
-                    .join("entries")
-                    .join(attachment.entry_id.to_string())
-                    .join(&attachment.file_name);
-                match fs::symlink_metadata(&source_path) {
-                    Ok(metadata) if metadata.file_type().is_file() => Some(format!(
-                        "attachments/entries/n{}/a{}-{}",
-                        attachment.entry_id, attachment.id, file_name
-                    )),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            ArchiveEntryAttachment {
-                id: attachment.id,
-                entry_id: attachment.entry_id,
-                file_name,
-                archive_path,
-                source_file_name: attachment.file_name.clone(),
-                bytes: Vec::new(),
-            }
-        })
-        .collect::<Vec<_>>();
+    let archive_entry_attachments: Vec<ArchiveEntryAttachment> = Vec::new();
 
     let archive_notes = notes
         .iter()
@@ -666,31 +533,6 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
         })
         .collect::<Vec<_>>();
 
-    let archive_entries = entries
-        .iter()
-        .map(|stored_entry| ArchiveEntry {
-            id: stored_entry.id,
-            title: stored_entry.title.clone(),
-            description: rewrite_all_attachment_references(
-                &stored_entry.description,
-                data_dir,
-                &note_attachments,
-                &archive_entry_attachments,
-                false,
-            ),
-            list_id: stored_entry.card_id,
-            position: stored_entry.position,
-            start_on: stored_entry.start_on.clone(),
-            due_on: stored_entry.due_on.clone(),
-            completed_at: stored_entry.completed_at,
-            cancelled_at: stored_entry.cancelled_at,
-            archived: stored_entry.archived,
-            reminder_enabled: stored_entry.reminder_enabled,
-            reminder_notified_for: stored_entry.reminder_notified_for.clone(),
-            deleted_at: stored_entry.deleted_at,
-        })
-        .collect::<Vec<_>>();
-
     Ok(ArchiveData {
         projects: projects
             .into_iter()
@@ -702,117 +544,20 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
                 deleted_at: model.deleted_at,
             })
             .collect(),
-        boards: boards
-            .into_iter()
-            .map(|model| ArchiveBoard {
-                id: model.id,
-                title: model.title,
-                project_id: model.project_id,
-                is_pinned: model.is_pinned,
-                last_opened_at: model.last_opened_at,
-                last_selected_view_id: model.last_selected_view_id,
-                deleted_at: model.deleted_at,
-            })
-            .collect(),
-        lists: lists
-            .into_iter()
-            .map(|model| ArchiveList {
-                id: model.id,
-                title: model.title,
-                board_id: model.board_id,
-                position: model.position,
-                workflow_role: ListWorkflowRole::from_storage(&model.workflow_role),
-                deleted_at: model.deleted_at,
-            })
-            .collect(),
-        entries: archive_entries,
+        boards: Vec::new(),
+        lists: Vec::new(),
+        entries: Vec::new(),
         notes: archive_notes,
-        board_labels: board_labels
-            .into_iter()
-            .map(|model| ArchiveBoardLabel {
-                id: model.id,
-                board_id: model.board_id,
-                name: model.name,
-                color: model.color,
-            })
-            .collect(),
-        entry_labels: entry_labels
-            .into_iter()
-            .map(|model| ArchiveEntryLabel {
-                id: model.id,
-                entry_id: model.entry_id,
-                board_label_id: model.board_label_id,
-            })
-            .collect(),
+        board_labels: Vec::new(),
+        entry_labels: Vec::new(),
         entry_attachments: archive_entry_attachments,
         note_attachments,
-        checklist_items: checklist_items
-            .into_iter()
-            .map(|model| ArchiveChecklistItem {
-                id: model.id,
-                entry_id: model.entry_id,
-                title: model.title,
-                checked: model.checked,
-                position: model.position,
-            })
-            .collect(),
-        board_properties: board_properties
-            .into_iter()
-            .map(|model| ArchiveBoardProperty {
-                id: model.id,
-                board_id: model.board_id,
-                name: model.name,
-                kind: model.kind,
-                position: model.position,
-                deleted_at: model.deleted_at,
-            })
-            .collect(),
-        property_options: property_options
-            .into_iter()
-            .map(|model| ArchivePropertyOption {
-                id: model.id,
-                property_id: model.property_id,
-                name: model.name,
-                color: model.color,
-                position: model.position,
-                deleted_at: model.deleted_at,
-            })
-            .collect(),
-        property_values: property_values
-            .into_iter()
-            .map(|model| ArchivePropertyValue {
-                entry_id: model.entry_id,
-                property_id: model.property_id,
-                text_value: model.text_value,
-                number_value: model.number_value,
-                boolean_value: model.boolean_value,
-                date_value: model.date_value,
-                option_id: model.option_id,
-            })
-            .collect(),
-        saved_views: saved_views
-            .into_iter()
-            .map(|model| ArchiveSavedView {
-                id: model.id,
-                board_id: model.board_id,
-                name: model.name,
-                position: model.position,
-                is_default: model.is_default,
-                config_version: model.config_version,
-                config_json: model.config_json,
-                deleted_at: model.deleted_at,
-            })
-            .collect(),
-        templates: templates
-            .into_iter()
-            .map(|model| ArchiveTemplate {
-                id: model.id,
-                name: model.name,
-                description: model.description,
-                definition_json: model.definition_json,
-                created_at: model.created_at,
-            })
-            .collect(),
+        checklist_items: Vec::new(),
+        board_properties: Vec::new(),
+        property_options: Vec::new(),
+        property_values: Vec::new(),
+        saved_views: Vec::new(),
+        templates: Vec::new(),
         note_aliases: note_aliases
             .into_iter()
             .map(|model| ArchiveNoteAlias {
@@ -870,51 +615,13 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
                 created_at: model.created_at,
             })
             .collect(),
-        recurring_tasks,
-        workflows,
-        workflow_runs,
+        recurring_tasks: Vec::new(),
+        workflows: Vec::new(),
+        workflow_runs: Vec::new(),
     })
 }
 
-fn archive_recurring_task_from_row(row: sea_orm::QueryResult) -> Result<ArchiveRecurringTask> {
-    Ok(ArchiveRecurringTask {
-        id: row.try_get("", "id")?,
-        entry_id: row.try_get("", "entry_id")?,
-        rule_json: row.try_get("", "rule_json")?,
-        next_on: row.try_get("", "next_on")?,
-        until_on: row.try_get("", "until_on")?,
-        enabled: row.try_get("", "enabled")?,
-        created_at: row.try_get("", "created_at")?,
-        updated_at: row.try_get("", "updated_at")?,
-    })
-}
 
-fn archive_workflow_from_row(row: sea_orm::QueryResult) -> Result<ArchiveWorkflow> {
-    Ok(ArchiveWorkflow {
-        id: row.try_get("", "id")?,
-        board_id: row.try_get("", "board_id")?,
-        name: row.try_get("", "name")?,
-        enabled: row.try_get("", "enabled")?,
-        definition_json: row.try_get("", "definition_json")?,
-        created_at: row.try_get("", "created_at")?,
-        updated_at: row.try_get("", "updated_at")?,
-    })
-}
-
-fn archive_workflow_run_from_row(row: sea_orm::QueryResult) -> Result<ArchiveWorkflowRun> {
-    Ok(ArchiveWorkflowRun {
-        id: row.try_get("", "id")?,
-        workflow_id: row.try_get("", "workflow_id")?,
-        board_id: row.try_get("", "board_id")?,
-        entry_id: row.try_get("", "entry_id")?,
-        trigger_kind: row.try_get("", "trigger_kind")?,
-        status: row.try_get("", "status")?,
-        actions_json: row.try_get("", "actions_json")?,
-        error: row.try_get("", "error")?,
-        started_at: row.try_get("", "started_at")?,
-        finished_at: row.try_get("", "finished_at")?,
-    })
-}
 
 fn load_note_attachments(data_dir: &Path, note_id: i64) -> Result<Vec<ArchiveNoteAttachment>> {
     let directory = data_dir.join("attachments").join(note_id.to_string());
@@ -1808,30 +1515,7 @@ fn validate_json<T: for<'de> Deserialize<'de>>(value: &str, kind: &str) -> Resul
     Ok(())
 }
 
-fn remap_workflow_definition_json(
-    definition_json: &str,
-    list_ids: &HashMap<i64, i64>,
-) -> Result<String> {
-    let mut remapped = definition_json.to_string();
-    for (old_id, new_id) in list_ids {
-        remapped = remapped.replace(
-            &format!(r#""list_id":{old_id}"#),
-            &format!(r#""list_id":{new_id}"#),
-        );
-    }
-    Ok(remapped)
-}
 
-fn remap_workflow_actions_json(actions_json: &str, list_ids: &HashMap<i64, i64>) -> Result<String> {
-    let mut remapped = actions_json.to_string();
-    for (old_id, new_id) in list_ids {
-        remapped = remapped.replace(
-            &format!(r#""list_id":{old_id}"#),
-            &format!(r#""list_id":{new_id}"#),
-        );
-    }
-    Ok(remapped)
-}
 
 
 fn validate_id_set(kind: &str, ids: impl IntoIterator<Item = i64>) -> Result<HashSet<i64>> {
@@ -1978,63 +1662,6 @@ async fn import_into_transaction(
         project_ids.insert(item.id, inserted.id);
     }
 
-    let mut board_ids = HashMap::new();
-    for item in &data.boards {
-        let inserted = board::ActiveModel {
-            title: Set(item.title.clone()),
-            project_id: Set(mapped_optional(
-                &project_ids,
-                item.project_id,
-                "board project",
-            )?),
-            is_pinned: Set(item.is_pinned),
-            last_opened_at: Set(item.last_opened_at),
-            last_selected_view_id: Set(0),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        board_ids.insert(item.id, inserted.id);
-    }
-
-    let mut list_ids = HashMap::new();
-    for item in &data.lists {
-        let inserted = card::ActiveModel {
-            title: Set(item.title.clone()),
-            board_id: Set(mapped_id(&board_ids, item.board_id, "list board")?),
-            position: Set(item.position),
-            workflow_role: Set(item.workflow_role.as_str().to_string()),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        list_ids.insert(item.id, inserted.id);
-    }
-
-    let mut entry_ids = HashMap::new();
-    for item in &data.entries {
-        let inserted = entry::ActiveModel {
-            title: Set(item.title.clone()),
-            description: Set(String::new()),
-            card_id: Set(mapped_id(&list_ids, item.list_id, "entry list")?),
-            position: Set(item.position),
-            start_on: Set(item.start_on.clone()),
-            due_on: Set(item.due_on.clone()),
-            completed_at: Set(item.completed_at),
-            cancelled_at: Set(item.cancelled_at),
-            archived: Set(item.archived),
-            reminder_enabled: Set(item.reminder_enabled),
-            reminder_notified_for: Set(item.reminder_notified_for.clone()),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        entry_ids.insert(item.id, inserted.id);
-    }
-
     let mut note_ids = HashMap::new();
     for item in &data.notes {
         let inserted = note::ActiveModel {
@@ -2077,31 +1704,7 @@ async fn import_into_transaction(
         );
     }
 
-    let mut entry_attachment_names = HashMap::new();
-    let mut entry_attachment_replacements = HashMap::new();
-    for attachment in &data.entry_attachments {
-        let target_entry_id = mapped_id(&entry_ids, attachment.entry_id, "entry attachment entry")?;
-        let target_file_name = if attachment.archive_path.is_some() {
-            write_imported_file(
-                &data_dir
-                    .join("attachments")
-                    .join("entries")
-                    .join(target_entry_id.to_string()),
-                &attachment.file_name,
-                &attachment.bytes,
-                created_paths,
-            )?
-        } else {
-            portable_file_name(&attachment.file_name)
-        };
-        entry_attachment_names.insert(attachment.id, target_file_name.clone());
-        if let Some(archive_path) = &attachment.archive_path {
-            entry_attachment_replacements.insert(
-                archive_path.clone(),
-                format!("attachments/entries/{target_entry_id}/{target_file_name}"),
-            );
-        }
-    }
+    let entry_attachment_replacements: HashMap<String, String> = HashMap::new();
 
     for item in &data.notes {
         let target_note_id = mapped_id(&note_ids, item.id, "note")?;
@@ -2133,244 +1736,6 @@ async fn import_into_transaction(
             ..Default::default()
         }
         .update(transaction)
-        .await?;
-    }
-
-    for item in &data.entries {
-        let target_entry_id = mapped_id(&entry_ids, item.id, "entry")?;
-        let description = rewrite_archive_references(
-            &item.description,
-            &note_attachment_replacements,
-            &entry_attachment_replacements,
-            false,
-        );
-        entry::ActiveModel {
-            id: Set(target_entry_id),
-            description: Set(description),
-            ..Default::default()
-        }
-        .update(transaction)
-        .await?;
-    }
-
-    let mut workflow_ids = HashMap::new();
-    for item in &data.workflows {
-        let definition_json = remap_workflow_definition_json(&item.definition_json, &list_ids)?;
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO workflow (board_id, name, enabled, definition_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                [
-                    mapped_id(&board_ids, item.board_id, "workflow board")?.into(),
-                    item.name.clone().into(),
-                    item.enabled.into(),
-                    definition_json.into(),
-                    item.created_at.into(),
-                    item.updated_at.into(),
-                ],
-            ))
-            .await?;
-        workflow_ids.insert(item.id, last_inserted_id(transaction).await?);
-    }
-
-    for item in &data.recurring_tasks {
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO recurring_task (entry_id, rule_json, next_on, until_on, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    mapped_id(&entry_ids, item.entry_id, "recurring task entry")?.into(),
-                    item.rule_json.clone().into(),
-                    item.next_on.clone().into(),
-                    item.until_on.clone().into(),
-                    item.enabled.into(),
-                    item.created_at.into(),
-                    item.updated_at.into(),
-                ],
-            ))
-            .await?;
-    }
-
-    for item in &data.workflow_runs {
-        let actions_json = remap_workflow_actions_json(&item.actions_json, &list_ids)?;
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO workflow_run (workflow_id, board_id, entry_id, trigger_kind, status, actions_json, error, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    mapped_id(&workflow_ids, item.workflow_id, "workflow run workflow")?.into(),
-                    mapped_id(&board_ids, item.board_id, "workflow run board")?.into(),
-                    mapped_optional(&entry_ids, item.entry_id, "workflow run entry")?.into(),
-                    item.trigger_kind.clone().into(),
-                    item.status.clone().into(),
-                    actions_json.into(),
-                    item.error.clone().into(),
-                    item.started_at.into(),
-                    item.finished_at.into(),
-                ],
-            ))
-            .await?;
-    }
-
-    let mut board_label_ids = HashMap::new();
-    for item in &data.board_labels {
-        let inserted = board_label::ActiveModel {
-            board_id: Set(mapped_id(&board_ids, item.board_id, "board label board")?),
-            name: Set(item.name.clone()),
-            color: Set(item.color.clone()),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        board_label_ids.insert(item.id, inserted.id);
-    }
-
-    for item in &data.entry_labels {
-        entry_label::ActiveModel {
-            entry_id: Set(mapped_id(&entry_ids, item.entry_id, "entry label entry")?),
-            board_label_id: Set(mapped_id(
-                &board_label_ids,
-                item.board_label_id,
-                "entry label board label",
-            )?),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-    }
-
-    for item in &data.entry_attachments {
-        entry_attachment::ActiveModel {
-            entry_id: Set(mapped_id(
-                &entry_ids,
-                item.entry_id,
-                "entry attachment entry",
-            )?),
-            file_name: Set(entry_attachment_names
-                .get(&item.id)
-                .cloned()
-                .unwrap_or_else(|| portable_file_name(&item.file_name))),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-    }
-
-    for item in &data.checklist_items {
-        entry_checklist_item::ActiveModel {
-            entry_id: Set(mapped_id(&entry_ids, item.entry_id, "checklist entry")?),
-            title: Set(item.title.clone()),
-            checked: Set(item.checked),
-            position: Set(item.position),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-    }
-
-    let mut property_ids = HashMap::new();
-    for item in &data.board_properties {
-        let inserted = board_property::ActiveModel {
-            board_id: Set(mapped_id(&board_ids, item.board_id, "property board")?),
-            name: Set(item.name.clone()),
-            kind: Set(item.kind.clone()),
-            position: Set(item.position),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        property_ids.insert(item.id, inserted.id);
-    }
-
-    let mut option_ids = HashMap::new();
-    for item in &data.property_options {
-        let inserted = board_property_option::ActiveModel {
-            property_id: Set(mapped_id(
-                &property_ids,
-                item.property_id,
-                "property option property",
-            )?),
-            name: Set(item.name.clone()),
-            color: Set(item.color.clone()),
-            position: Set(item.position),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        option_ids.insert(item.id, inserted.id);
-    }
-
-    for item in &data.property_values {
-        entry_property_value::ActiveModel {
-            entry_id: Set(mapped_id(
-                &entry_ids,
-                item.entry_id,
-                "property value entry",
-            )?),
-            property_id: Set(mapped_id(
-                &property_ids,
-                item.property_id,
-                "property value property",
-            )?),
-            text_value: Set(item.text_value.clone()),
-            number_value: Set(item.number_value),
-            boolean_value: Set(item.boolean_value),
-            date_value: Set(item.date_value.clone()),
-            option_id: Set(mapped_optional(
-                &option_ids,
-                item.option_id,
-                "property value option",
-            )?),
-        }
-        .insert(transaction)
-        .await?;
-    }
-
-    let mut view_ids = HashMap::new();
-    for item in &data.saved_views {
-        let inserted = saved_board_view::ActiveModel {
-            board_id: Set(mapped_id(&board_ids, item.board_id, "saved view board")?),
-            name: Set(item.name.clone()),
-            position: Set(item.position),
-            is_default: Set(item.is_default),
-            config_version: Set(item.config_version),
-            config_json: Set(item.config_json.clone()),
-            deleted_at: Set(item.deleted_at),
-            ..Default::default()
-        }
-        .insert(transaction)
-        .await?;
-        view_ids.insert(item.id, inserted.id);
-    }
-
-    for item in &data.boards {
-        if item.last_selected_view_id == 0 {
-            continue;
-        }
-        board::ActiveModel {
-            id: Set(mapped_id(&board_ids, item.id, "board")?),
-            last_selected_view_id: Set(mapped_id(
-                &view_ids,
-                item.last_selected_view_id,
-                "board selected view",
-            )?),
-            ..Default::default()
-        }
-        .update(transaction)
-        .await?;
-    }
-
-    for item in &data.templates {
-        board_template::ActiveModel {
-            name: Set(item.name.clone()),
-            description: Set(item.description.clone()),
-            definition_json: Set(item.definition_json.clone()),
-            created_at: Set(item.created_at),
-            ..Default::default()
-        }
-        .insert(transaction)
         .await?;
     }
 
@@ -2418,26 +1783,10 @@ async fn import_into_transaction(
                 item.project_id,
                 "reference alias project",
             )?),
-            board_id: Set(mapped_optional(
-                &board_ids,
-                item.board_id,
-                "reference alias board",
-            )?),
-            list_id: Set(mapped_optional(
-                &list_ids,
-                item.list_id,
-                "reference alias list",
-            )?),
-            card_id: Set(mapped_optional(
-                &entry_ids,
-                item.entry_id,
-                "reference alias entry",
-            )?),
-            saved_view_id: Set(mapped_optional(
-                &view_ids,
-                item.saved_view_id,
-                "reference alias saved view",
-            )?),
+            board_id: Set(None),
+            list_id: Set(None),
+            card_id: Set(None),
+            saved_view_id: Set(None),
             created_at: Set(item.created_at),
             ..Default::default()
         }
@@ -2452,36 +1801,16 @@ async fn import_into_transaction(
                 item.source_note_id,
                 "workspace link source note",
             )?),
-            source_entry_id: Set(mapped_optional(
-                &entry_ids,
-                item.source_entry_id,
-                "workspace link source entry",
-            )?),
+            source_entry_id: Set(None),
             target_note_id: Set(mapped_optional(
                 &note_ids,
                 item.target_note_id,
                 "workspace link target note",
             )?),
-            target_board_id: Set(mapped_optional(
-                &board_ids,
-                item.target_board_id,
-                "workspace link target board",
-            )?),
-            target_card_id: Set(mapped_optional(
-                &list_ids,
-                item.target_list_id,
-                "workspace link target list",
-            )?),
-            target_entry_id: Set(mapped_optional(
-                &entry_ids,
-                item.target_entry_id,
-                "workspace link target entry",
-            )?),
-            target_saved_view_id: Set(mapped_optional(
-                &view_ids,
-                item.target_saved_view_id,
-                "workspace link saved view",
-            )?),
+            target_board_id: Set(None),
+            target_card_id: Set(None),
+            target_entry_id: Set(None),
+            target_saved_view_id: Set(None),
             origin: Set(item.origin.clone()),
             ordinal: Set(item.ordinal),
             raw_target: Set(item.raw_target.clone()),
@@ -2500,7 +1829,6 @@ async fn import_into_transaction(
         transaction,
         &data,
         &note_ids,
-        &entry_ids,
         &note_attachment_replacements,
         &entry_attachment_replacements,
     )
@@ -2521,24 +1849,6 @@ async fn import_into_transaction(
                 &note_attachment_replacements,
                 &entry_attachment_replacements,
                 true,
-            )),
-        }
-        .insert(transaction)
-        .await?;
-    }
-    for item in &data.entries {
-        workspace_link_index_state::ActiveModel {
-            source_kind: Set("entry".to_string()),
-            source_id: Set(mapped_id(
-                &entry_ids,
-                item.id,
-                "workspace link index entry",
-            )?),
-            indexed_content: Set(rewrite_archive_references(
-                &item.description,
-                &note_attachment_replacements,
-                &entry_attachment_replacements,
-                false,
             )),
         }
         .insert(transaction)
@@ -2617,7 +1927,6 @@ async fn refresh_imported_link_offsets(
     transaction: &DatabaseTransaction,
     data: &ArchiveData,
     note_ids: &HashMap<i64, i64>,
-    entry_ids: &HashMap<i64, i64>,
     note_attachment_replacements: &HashMap<String, String>,
     entry_attachment_replacements: &HashMap<String, String>,
 ) -> Result<()> {
@@ -2669,23 +1978,6 @@ async fn refresh_imported_link_offsets(
         .await?;
     }
 
-    for item in &data.entries {
-        let entry_id = mapped_id(entry_ids, item.id, "entry link source")?;
-        let description = rewrite_archive_references(
-            &item.description,
-            note_attachment_replacements,
-            entry_attachment_replacements,
-            false,
-        );
-        refresh_workspace_link_offsets(
-            transaction,
-            None,
-            Some(entry_id),
-            "entry_wikilink",
-            &parsed_link_positions(&description, false),
-        )
-        .await?;
-    }
 
     Ok(())
 }
@@ -2742,16 +2034,7 @@ fn mapped_optional(
     source_id.map(|id| mapped_id(map, id, kind)).transpose()
 }
 
-async fn last_inserted_id(db: &DatabaseTransaction) -> Result<i64> {
-    db.query_one_raw(Statement::from_string(
-        DbBackend::Sqlite,
-        "SELECT last_insert_rowid() AS id",
-    ))
-    .await?
-    .context("archive import did not return an inserted ID")?
-    .try_get("", "id")
-    .map_err(Into::into)
-}
+
 
 fn rewrite_archive_references(
     content: &str,
@@ -2842,24 +2125,9 @@ async fn clear_workspace(db: &impl ConnectionTrait) -> Result<()> {
         "workspace_link_index_state",
         "note_link",
         "note_link_index_state",
-        "entry_property_value",
-        "entry_label",
-        "entry_attachment",
-        "entry_checklist_item",
-        "workflow_run",
-        "workflow",
-        "recurring_task",
-        "saved_board_view",
-        "board_property_option",
-        "board_property",
-        "entry",
-        "card",
         "note_alias",
-        "board_label",
         "note",
-        "board",
         "project",
-        "board_template",
     ] {
         db.execute_unprepared(&format!("DELETE FROM {table}"))
             .await?;
@@ -2971,101 +2239,6 @@ mod tests {
         }
         .insert(&source_db)
         .await?;
-        let board = board::ActiveModel {
-            title: Set("Launch plan".to_string()),
-            project_id: Set(Some(project.id)),
-            is_pinned: Set(true),
-            last_opened_at: Set(Some(20)),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        let list = card::ActiveModel {
-            id: Set(31),
-            title: Set("In progress".to_string()),
-            board_id: Set(board.id),
-            position: Set(1),
-            workflow_role: Set("done".to_string()),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        let entry = entry::ActiveModel {
-            id: Set(32),
-            title: Set("Ship export".to_string()),
-            description: Set(String::new()),
-            card_id: Set(list.id),
-            position: Set(2),
-            start_on: Set(Some("2026-09-01".to_string())),
-            due_on: Set(Some("2026-09-03".to_string())),
-            completed_at: Set(Some(1_725_840_000)),
-            cancelled_at: Set(None),
-            archived: Set(true),
-            reminder_enabled: Set(true),
-            reminder_notified_for: Set(Some("2026-09-02".to_string())),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-
-        let workflow_definition_json = format!(
-            r#"{{"schema_version":1,"name":"Move export","enabled":true,"nodes":[{{"id":"trigger","kind":{{"trigger":{{"card_moved_to_list":{{"list_id":{}}}}}}},"position":{{"x":0.0,"y":0.0}}}},{{"id":"action","kind":{{"action":{{"move_to_list":{{"list_id":{},"position":{{"bottom":null}}}}}}}},"position":{{"x":0.0,"y":0.0}}}}],"edges":[{{"id":"edge","from":"trigger","to":"action","kind":"default"}}]}}"#,
-            list.id, list.id
-        );
-        let workflow_actions_json = format!(
-            r#"[{{"move_to_list":{{"list_id":{},"position":{{"bottom":null}}}}}}]"#,
-            list.id
-        );
-        source_db
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO workflow (id, board_id, name, enabled, definition_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    41_i64.into(),
-                    board.id.into(),
-                    "Move export".to_string().into(),
-                    true.into(),
-                    workflow_definition_json.into(),
-                    20_i64.into(),
-                    21_i64.into(),
-                ],
-            ))
-            .await?;
-        source_db
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO recurring_task (id, entry_id, rule_json, next_on, until_on, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    61_i64.into(),
-                    entry.id.into(),
-                    r#"{"start_on":"2026-09-03","rule":{"frequency":"daily","interval":1},"occurrence_limit":3,"generation_mode":"on_completion"}"#.to_string().into(),
-                    "2026-09-04".to_string().into(),
-                    Some("2026-09-06".to_string()).into(),
-                    true.into(),
-                    22_i64.into(),
-                    23_i64.into(),
-                ],
-            ))
-            .await?;
-        source_db
-            .execute_raw(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                "INSERT INTO workflow_run (id, workflow_id, board_id, entry_id, trigger_kind, status, actions_json, error, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    51_i64.into(),
-                    41_i64.into(),
-                    board.id.into(),
-                    entry.id.into(),
-                    "card_moved".to_string().into(),
-                    "succeeded".to_string().into(),
-                    workflow_actions_json.into(),
-                    Some("preserved".to_string()).into(),
-                    24_i64.into(),
-                    Some(25_i64).into(),
-                ],
-            ))
-            .await?;
-
         let first_note_file = source_notes_dir.join("first.md");
         let second_note_file = source_notes_dir.join("second.md");
         let first_note = note::ActiveModel {
@@ -3118,111 +2291,6 @@ mod tests {
         .update(&source_db)
         .await?;
 
-        let entry_attachment_dir = source_dir
-            .path()
-            .join("attachments")
-            .join("entries")
-            .join(entry.id.to_string());
-        fs::create_dir_all(&entry_attachment_dir)?;
-        fs::write(entry_attachment_dir.join("card.png"), b"entry image")?;
-        let entry_description = format!("![card](attachments/entries/{}/card.png)", entry.id);
-        entry::ActiveModel {
-            id: Set(entry.id),
-            description: Set(entry_description),
-            ..Default::default()
-        }
-        .update(&source_db)
-        .await?;
-
-        let label = board_label::ActiveModel {
-            board_id: Set(board.id),
-            name: Set("Important".to_string()),
-            color: Set("red".to_string()),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        entry_label::ActiveModel {
-            entry_id: Set(entry.id),
-            board_label_id: Set(label.id),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        entry_checklist_item::ActiveModel {
-            entry_id: Set(entry.id),
-            title: Set("Verify archive".to_string()),
-            checked: Set(true),
-            position: Set(4),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        let entry_attachment = entry_attachment::ActiveModel {
-            entry_id: Set(entry.id),
-            file_name: Set("card.png".to_string()),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-
-        let property = board_property::ActiveModel {
-            board_id: Set(board.id),
-            name: Set("Status".to_string()),
-            kind: Set("select".to_string()),
-            position: Set(0),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        let option = board_property_option::ActiveModel {
-            property_id: Set(property.id),
-            name: Set("Ready".to_string()),
-            color: Set("green".to_string()),
-            position: Set(0),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        entry_property_value::ActiveModel {
-            entry_id: Set(entry.id),
-            property_id: Set(property.id),
-            text_value: Set(Some("ready".to_string())),
-            number_value: Set(Some(2.5)),
-            boolean_value: Set(Some(true)),
-            date_value: Set(Some("2026-09-03".to_string())),
-            option_id: Set(Some(option.id)),
-        }
-        .insert(&source_db)
-        .await?;
-        let view = saved_board_view::ActiveModel {
-            board_id: Set(board.id),
-            name: Set("Planning".to_string()),
-            position: Set(0),
-            is_default: Set(true),
-            config_version: Set(2),
-            config_json: Set("{\"group\":\"status\"}".to_string()),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
-        board::ActiveModel {
-            id: Set(board.id),
-            last_selected_view_id: Set(view.id),
-            ..Default::default()
-        }
-        .update(&source_db)
-        .await?;
-
-        board_template::ActiveModel {
-            name: Set("Launch template".to_string()),
-            description: Set("Reusable launch board".to_string()),
-            definition_json: Set("{\"columns\":[]}".to_string()),
-            created_at: Set(16),
-            ..Default::default()
-        }
-        .insert(&source_db)
-        .await?;
         note_alias::ActiveModel {
             note_id: Set(first_note.id),
             alias: Set("First".to_string()),
@@ -3246,12 +2314,11 @@ mod tests {
         .await?;
         workspace_link::ActiveModel {
             source_note_id: Set(Some(first_note.id)),
-            target_board_id: Set(Some(board.id)),
-            target_saved_view_id: Set(Some(view.id)),
+            target_note_id: Set(Some(second_note.id)),
             origin: Set("manual".to_string()),
             ordinal: Set(0),
-            raw_target: Set(Some("Launch plan".to_string())),
-            display_text: Set(Some("Launch plan".to_string())),
+            raw_target: Set(Some("Second note".to_string())),
+            display_text: Set(Some("Second note".to_string())),
             start_byte: Set(None),
             end_byte: Set(None),
             line_number: Set(None),
@@ -3261,9 +2328,9 @@ mod tests {
         .insert(&source_db)
         .await?;
         workspace_reference_alias::ActiveModel {
-            alias: Set("In progress".to_string()),
-            normalized_alias: Set("in progress".to_string()),
-            list_id: Set(Some(list.id)),
+            alias: Set("Product Alias".to_string()),
+            normalized_alias: Set("product alias".to_string()),
+            project_id: Set(Some(project.id)),
             created_at: Set(19),
             ..Default::default()
         }
@@ -3279,27 +2346,27 @@ mod tests {
             export.counts,
             WorkspaceArchiveCounts {
                 projects: 1,
-                boards: 1,
-                lists: 1,
-                entries: 1,
+                boards: 0,
+                lists: 0,
+                entries: 0,
                 notes: 2,
-                board_labels: 1,
-                entry_labels: 1,
-                entry_attachments: 1,
+                board_labels: 0,
+                entry_labels: 0,
+                entry_attachments: 0,
                 note_attachments: 1,
-                checklist_items: 1,
-                board_properties: 1,
-                property_options: 1,
-                property_values: 1,
-                saved_views: 1,
-                templates: 1,
+                checklist_items: 0,
+                board_properties: 0,
+                property_options: 0,
+                property_values: 0,
+                saved_views: 0,
+                templates: 0,
                 note_aliases: 1,
                 note_links: 1,
                 workspace_links: 1,
                 reference_aliases: 1,
-                recurring_tasks: 1,
-                workflows: 1,
-                workflow_runs: 1,
+                recurring_tasks: 0,
+                workflows: 0,
+                workflow_runs: 0,
             }
         );
 
@@ -3312,17 +2379,6 @@ mod tests {
             zip.by_name(&format!("attachments/notes/n{}/image.png", first_note.id))
                 .is_ok()
         );
-        assert!(
-            zip.by_name(&format!(
-                "attachments/entries/n{}/a{}-card.png",
-                entry.id, entry_attachment.id
-            ))
-            .is_ok()
-        );
-        let mut workspace_json = String::new();
-        zip.by_name(WORKSPACE_DATA_PATH)?
-            .read_to_string(&mut workspace_json)?;
-        assert!(workspace_json.contains("attachments/entries/"));
         let note_path = zip
             .file_names()
             .find(|path| path.starts_with("notes/"))
@@ -3356,9 +2412,6 @@ mod tests {
         assert_eq!(imported.counts, export.counts);
 
         let projects = project::Entity::find().all(&target_db).await?;
-        let boards = board::Entity::find().all(&target_db).await?;
-        let lists = card::Entity::find().all(&target_db).await?;
-        let entries = entry::Entity::find().all(&target_db).await?;
         let notes = note::Entity::find()
             .order_by_asc(note::Column::Id)
             .all(&target_db)
@@ -3366,19 +2419,7 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "Product");
         assert_eq!(projects[0].folder_path, None);
-        assert_eq!(boards.len(), 1);
-        assert_eq!(lists.len(), 1);
-        assert_eq!(lists[0].workflow_role, "done");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].start_on.as_deref(), Some("2026-09-01"));
-        assert_eq!(entries[0].completed_at, Some(1_725_840_000));
-        assert_eq!(entries[0].cancelled_at, None);
-        assert!(entries[0].archived);
         assert_eq!(notes.len(), 2);
-        assert_eq!(
-            entries[0].description,
-            format!("![card](attachments/entries/{}/card.png)", entries[0].id)
-        );
         assert_eq!(
             notes[0].cached_content,
             format!(
@@ -3406,49 +2447,6 @@ mod tests {
             )?,
             b"note image"
         );
-        assert_eq!(
-            fs::read(
-                target_dir
-                    .path()
-                    .join("attachments")
-                    .join("entries")
-                    .join(entries[0].id.to_string())
-                    .join("card.png")
-            )?,
-            b"entry image"
-        );
-        assert!(
-            board::Entity::find_by_id(boards[0].id)
-                .one(&target_db)
-                .await?
-                .context("imported board should exist")?
-                .last_selected_view_id
-                > 0
-        );
-        assert_eq!(board_label::Entity::find().count(&target_db).await?, 1);
-        assert_eq!(entry_label::Entity::find().count(&target_db).await?, 1);
-        assert_eq!(
-            entry_checklist_item::Entity::find()
-                .count(&target_db)
-                .await?,
-            1
-        );
-        assert_eq!(entry_attachment::Entity::find().count(&target_db).await?, 1);
-        assert_eq!(board_property::Entity::find().count(&target_db).await?, 1);
-        assert_eq!(
-            board_property_option::Entity::find()
-                .count(&target_db)
-                .await?,
-            1
-        );
-        assert_eq!(
-            entry_property_value::Entity::find()
-                .count(&target_db)
-                .await?,
-            1
-        );
-        assert_eq!(saved_board_view::Entity::find().count(&target_db).await?, 1);
-        assert_eq!(board_template::Entity::find().count(&target_db).await?, 1);
         assert_eq!(note_alias::Entity::find().count(&target_db).await?, 1);
         assert_eq!(note_link::Entity::find().count(&target_db).await?, 1);
         let imported_note_link = note_link::Entity::find()
@@ -3473,54 +2471,6 @@ mod tests {
                 .await?,
             1
         );
-        let imported_workflow = target_db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT id, board_id, definition_json FROM workflow",
-            ))
-            .await?
-            .context("imported workflow should exist")?;
-        assert_ne!(imported_workflow.try_get::<i64>("", "id")?, 41);
-        assert_eq!(
-            imported_workflow.try_get::<i64>("", "board_id")?,
-            boards[0].id
-        );
-        let imported_definition = imported_workflow.try_get::<String>("", "definition_json")?;
-        assert!(imported_definition.contains(&format!(r#""list_id":{}"#, lists[0].id)));
-        let imported_recurring = target_db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT id, entry_id, rule_json, next_on, until_on, enabled, created_at, updated_at FROM recurring_task",
-            ))
-            .await?
-            .context("imported recurring task should exist")?;
-        assert_ne!(imported_recurring.try_get::<i64>("", "id")?, 61);
-        assert_eq!(
-            imported_recurring.try_get::<i64>("", "entry_id")?,
-            entries[0].id
-        );
-        assert_eq!(
-            imported_recurring.try_get::<String>("", "next_on")?,
-            "2026-09-04"
-        );
-        let imported_run = target_db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT id, workflow_id, board_id, entry_id, trigger_kind, status, actions_json, error, started_at, finished_at FROM workflow_run",
-            ))
-            .await?
-            .context("imported workflow run should exist")?;
-        assert_ne!(imported_run.try_get::<i64>("", "id")?, 51);
-        assert_eq!(
-            imported_run.try_get::<i64>("", "workflow_id")?,
-            imported_workflow.try_get::<i64>("", "id")?
-        );
-        assert_eq!(imported_run.try_get::<i64>("", "entry_id")?, entries[0].id);
-        assert!(
-            imported_run
-                .try_get::<String>("", "actions_json")?
-                .contains(&format!(r#""list_id":{}"#, lists[0].id))
-        );
         assert_eq!(
             note_link_index_state::Entity::find()
                 .count(&target_db)
@@ -3531,7 +2481,7 @@ mod tests {
             workspace_link_index_state::Entity::find()
                 .count(&target_db)
                 .await?,
-            3
+            2
         );
         let search_results =
             crate::workspace::search::search_workspace(&target_db, "First note", 16).await?;

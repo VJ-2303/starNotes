@@ -492,13 +492,25 @@ fn save_status_pill(save_state: SaveState, cx: &mut Context<AppShell>) -> impl I
 fn save_state_status(
     save_state: SaveState,
     cx: &mut Context<AppShell>,
-) -> (IconName, Hsla, &'static str) {
+) -> (IconName, Hsla, SharedString) {
     match save_state {
-        SaveState::Saved => (IconName::CircleCheck, cx.theme().success, "Saved"),
-        SaveState::Dirty => (IconName::Asterisk, cx.theme().warning, "Unsaved changes"),
-        SaveState::Saving => (IconName::Loader, cx.theme().info, "Saving"),
-        SaveState::Missing => (IconName::TriangleAlert, cx.theme().warning, "File missing"),
-        SaveState::Error(_) => (IconName::TriangleAlert, cx.theme().danger, "Save failed"),
+        SaveState::Saved => (IconName::CircleCheck, cx.theme().success, "Saved".into()),
+        SaveState::Dirty => (
+            IconName::Asterisk,
+            cx.theme().warning,
+            "Unsaved changes".into(),
+        ),
+        SaveState::Saving => (IconName::Loader, cx.theme().info, "Saving".into()),
+        SaveState::Missing => (
+            IconName::TriangleAlert,
+            cx.theme().warning,
+            "File missing".into(),
+        ),
+        SaveState::Error(err) => (
+            IconName::TriangleAlert,
+            cx.theme().danger,
+            format!("Save failed: {err}").into(),
+        ),
     }
 }
 
