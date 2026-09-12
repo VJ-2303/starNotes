@@ -77,6 +77,7 @@ jobs:
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             libfontconfig1-dev \
             libfreetype6-dev \
             libsqlite3-dev \
@@ -88,8 +89,10 @@ jobs:
             libxcb-present-dev \
             libxcb-randr0-dev \
             libxcb-render0-dev \
+            libxcb-shape0-dev \
             libxcb-shm0-dev \
             libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
             libxcb1-dev
 
       - name: Install Rust
