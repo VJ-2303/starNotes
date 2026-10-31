@@ -3,7 +3,7 @@
 _Last updated: 2026-10-31_
 
 ## Project purpose
-Castle is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+StarNote is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ## Recent issues
 - [DONE] #0001 blaze fails on freetype-sys build script: unsupported writable static __RUST_STD_INTERNAL_VAL [freetype-sys v0.20.1] -> Use cargo with sccache and mold linker instead of blaze to avoid ra-jit freetype-sys static failure and stay within 7GB RAM [.cargo/config.toml] (fixed)
@@ -12,6 +12,9 @@ Castle is a native note-taking app for Linux built with Rust and [GPUI Kit](http
 ## Decisions
 - Configure cargo with 3 parallel jobs, sccache compiler cache, and mold linker to fit within 7GB RAM limit [.cargo/config.toml]
 - Refactored application into pure note-taking by removing dead Kanban, Board, Card, and List code, models, and UI references [crates/]
+- Removed Vim emulation mode and associated keymaps, overlays, state, and settings [crates/document_editor/]
+- Switched global allocator to mimalloc to reduce memory fragmentation and lower RSS on Linux [crates/app/src/main.rs]
+- Rename application from Castle to StarNote across binary, desktop entries, app paths, onboarding, and docs
 
 ## Notes
 - Initial commit

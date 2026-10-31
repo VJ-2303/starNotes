@@ -479,11 +479,6 @@ const SETTINGS_SCHEMA: &[SettingDefinition] = &[
         kind: SettingValueKind::Boolean,
     },
     SettingDefinition {
-        name: "editor_vim_mode",
-        detail: "Enable Vim editing mode",
-        kind: SettingValueKind::Boolean,
-    },
-    SettingDefinition {
         name: "editor_focus_mode",
         detail: "Dim text outside the active paragraph",
         kind: SettingValueKind::Boolean,

@@ -84,11 +84,6 @@ pub(super) struct InspectorLinksState {
 
 
 
-pub(super) struct VimSessionState {
-    pub(super) state: VimState,
-    pub(super) search_active: bool,
-}
-
 pub(super) struct WritingExperienceState {
     pub(super) focus_mode: bool,
     pub(super) typewriter_scrolling: bool,

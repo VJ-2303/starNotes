@@ -12,7 +12,6 @@ mod persistence;
 mod smart_editing;
 mod state;
 mod view;
-mod vim;
 
 use gpui_kit::component::{
     Theme,
@@ -35,7 +34,6 @@ use document_state::*;
 use outline::{DocumentOutline, JsonOutline, MarkdownOutline, OutlineRow};
 use settings::AppSettings;
 pub use state::*;
-use vim::VimState;
 
 pub use document_state::{DEFAULT_NOTE, DocumentStats, SaveState};
 pub use file_paths::unique_note_path;
@@ -63,7 +61,6 @@ pub struct DocumentEditorView {
     editor: Entity<EditorState>,
     kind: DocumentKind,
     mode: EditorMode,
-    vim_state: VimSessionState,
     writing: WritingExperienceState,
     zen: ZenModeState,
     persistence: PersistenceState,
@@ -95,7 +92,6 @@ impl DocumentEditorView {
         let soft_wrap = AppSettings::editor_soft_wrap(cx);
         let outline_visible = AppSettings::document_outline_visible(cx);
         let preview_font_size_bits = AppSettings::markdown_preview_font_size(cx).to_bits();
-        let vim_enabled = AppSettings::editor_vim_mode(cx);
         let focus_mode = AppSettings::editor_focus_mode(cx);
         let typewriter_scrolling = AppSettings::editor_typewriter_scrolling(cx);
         let wikilink_completion_provider =
@@ -177,10 +173,6 @@ impl DocumentEditorView {
             editor,
             kind: DocumentKind::PlainText,
             mode: EditorMode::Source,
-            vim_state: VimSessionState {
-                state: VimState::new(vim_enabled),
-                search_active: false,
-            },
             writing: WritingExperienceState {
                 focus_mode,
                 typewriter_scrolling,
@@ -381,7 +373,6 @@ impl DocumentEditorView {
         }
         self.mode = mode;
         if mode.shows_preview() {
-            self.reset_vim_command();
             self.activate_mermaids(cx);
         } else {
             self.deactivate_mermaids(cx);
@@ -400,7 +391,6 @@ impl DocumentEditorView {
             EditorMode::Preview => EditorMode::Split,
         };
         if self.mode.shows_preview() {
-            self.reset_vim_command();
             self.activate_mermaids(cx);
         } else {
             self.deactivate_mermaids(cx);
@@ -416,6 +406,11 @@ impl DocumentEditorView {
                 self.focus_handle.focus(window, cx);
             }
         }
+    }
+
+    pub(crate) fn focus_source_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.focus(window, cx));
     }
 
     fn sync_writing_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -510,9 +505,7 @@ impl DocumentEditorView {
             return;
         }
 
-        let selection = self
-            .vim_visual_range(cx)
-            .unwrap_or_else(|| self.editor.read(cx).selected_range());
+        let selection = self.editor.read(cx).selected_range();
         let (focused_range, text_len) = {
             let editor = self.editor.read(cx);
             (

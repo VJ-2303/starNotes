@@ -517,7 +517,7 @@ pub async fn load_change_revision(
              FROM castle_change_revision WHERE id = 1",
         ))
         .await?
-        .ok_or_else(|| DbErr::Custom("Castle change revision row is missing".to_string()))?;
+        .ok_or_else(|| DbErr::Custom("StarNote change revision row is missing".to_string()))?;
 
     Ok(ChangeRevision {
         revision: row.try_get("", "revision")?,

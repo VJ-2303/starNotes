@@ -1,4 +1,4 @@
-//! Shared measurement primitives for Castle's test binaries.
+//! Shared measurement primitives for StarNote's test binaries.
 //!
 //! Add this crate only as a development dependency. A final test binary may
 //! contain only one global allocator, so consumers must remove any local

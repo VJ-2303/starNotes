@@ -1,16 +1,17 @@
-# Releasing Castle
+# Releasing StarNote
 
-Castle releases are built by GitHub Actions for Linux x86-64. Each release contains a standalone `castle` binary packaged as a `.tar.gz` archive and a `SHA256SUMS.txt` checksum file.
+StarNote releases are built by GitHub Actions for Linux x86-64. Each release contains a standalone `starnote` binary packaged as a `.tar.gz` archive and a `SHA256SUMS.txt` checksum file.
 
 ## Publish a release
 
 1. Update `version` under `[workspace.package]` in `Cargo.toml`.
-2. Refresh the lockfile and verify the release build locally:
+2. Verify workspace code compiles:
 
    ```sh
-   cargo check --workspace --all-targets
-   cargo build --locked --release --package app --bin castle
+   make check
    ```
+
+   *(Note: Fat-LTO release compilation is heavy and runs automatically on GitHub Actions; avoid building release binaries locally on low-RAM machines.)*
 
 3. Commit the version change:
 

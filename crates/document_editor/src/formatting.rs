@@ -21,11 +21,9 @@ impl DocumentEditorView {
         }
 
         let kind = self.kind;
-        let (source, input_selection) = self.editor.read_with(cx, |editor, _| {
+        let (source, selection) = self.editor.read_with(cx, |editor, _| {
             (editor.text().to_string(), editor.selected_range())
         });
-        let vim_selection = self.vim_visual_range(cx);
-        let selection = vim_selection.clone().unwrap_or(input_selection);
 
         self.persistence.format_task = Some(cx.spawn_in(window, async move |this, cx| {
             let (source, result) = cx
@@ -69,11 +67,6 @@ impl DocumentEditorView {
                             }
                         });
 
-                        if vim_selection.is_some() {
-                            this.finish_vim_visual_edit(mapped_selection.start, window, cx);
-                        } else {
-                            this.reset_vim_command();
-                        }
                         window.push_notification(Notification::success("Document formatted."), cx);
                     }
                     Ok(None) => {
@@ -105,23 +98,13 @@ impl DocumentEditorView {
             return;
         }
 
-        let vim_range = self.vim_visual_range(cx);
         if action.0 == MarkdownFormat::Footnote {
-            let insertion_range = vim_range
-                .clone()
-                .unwrap_or_else(|| self.editor.read(cx).selected_range());
-            let cursor = self.insert_footnote(insertion_range, window, cx);
-            if let (Some(cursor), Some(_)) = (cursor, vim_range) {
-                self.finish_vim_visual_edit(cursor, window, cx);
-            }
+            let insertion_range = self.editor.read(cx).selected_range();
+            self.insert_footnote(insertion_range, window, cx);
             return;
         }
 
-        let selected = if let Some(range) = vim_range.as_ref() {
-            self.editor.read(cx).text().slice(range.clone()).to_string()
-        } else {
-            self.editor.read(cx).selected_value().to_string()
-        };
+        let selected = self.editor.read(cx).selected_value().to_string();
         let replacement = match action.0 {
             MarkdownFormat::HeadingOne => Self::prefix_block(&selected, "# ", "Heading"),
             MarkdownFormat::HeadingTwo => Self::prefix_block(&selected, "## ", "Heading"),
@@ -150,25 +133,10 @@ impl DocumentEditorView {
             MarkdownFormat::CodeBlock => Self::code_block(&selected),
         };
 
-        if let Some(range) = vim_range {
-            self.editor.update(cx, |editor, cx| {
-                let start = editor.text().offset_to_offset_utf16(range.start);
-                let end = editor.text().offset_to_offset_utf16(range.end);
-                EntityInputHandler::replace_text_in_range(
-                    editor,
-                    Some(start..end),
-                    &replacement,
-                    window,
-                    cx,
-                );
-            });
-            self.finish_vim_visual_edit(range.start, window, cx);
-        } else {
-            self.editor.update(cx, |editor, cx| {
-                editor.replace(replacement, window, cx);
-                editor.focus(window, cx);
-            });
-        }
+        self.editor.update(cx, |editor, cx| {
+            editor.replace(replacement, window, cx);
+            editor.focus(window, cx);
+        });
     }
 
     pub(super) fn wrap_inline(
@@ -756,16 +724,6 @@ fn markdown_line_continuation(line: &str) -> Option<MarkdownLineContinuation> {
     None
 }
 
-pub(super) fn markdown_newline_prefix(line: &str) -> String {
-    match markdown_line_continuation(line.trim_end_matches(['\r', '\n'])) {
-        Some(MarkdownLineContinuation::Continue(prefix)) => prefix,
-        Some(MarkdownLineContinuation::Exit { .. }) | None => line
-            .chars()
-            .take_while(|ch| *ch == ' ' || *ch == '\t')
-            .collect(),
-    }
-}
-
 fn markdown_indent_end(line: &str) -> usize {
     line.char_indices()
         .find(|(_, ch)| *ch != ' ' && *ch != '\t')
@@ -1131,10 +1089,6 @@ second line</mark>"#
 
     #[test]
     fn continues_all_markdown_list_markers_and_preserves_crlf() {
-        assert_eq!(markdown_newline_prefix("* item"), "* ");
-        assert_eq!(markdown_newline_prefix("+ item"), "+ ");
-        assert_eq!(markdown_newline_prefix("3) item\r\n"), "4) ");
-        assert_eq!(markdown_newline_prefix("- [X]\titem\r\n"), "- [ ] ");
         assert_eq!(
             markdown_enter_edit("+ item\r\n", "+ item\r\n".len()),
             Some(MarkdownEnterEdit {
@@ -1153,7 +1107,6 @@ second line</mark>"#
                 replacement: String::new(),
             })
         );
-        assert_eq!(markdown_newline_prefix("> > quote"), "> > ");
         assert_eq!(
             markdown_enter_edit("> > \n", "> > \n".len()),
             Some(MarkdownEnterEdit {

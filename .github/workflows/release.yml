@@ -111,17 +111,17 @@ jobs:
       # fat LTO + codegen-units=1 are already set in [profile.release].
       # CARGO_BUILD_JOBS=4 uses the runner's full 4-core capacity; the local
       # .cargo/config.toml caps at 2 to spare RAM on the dev machine.
-      - name: Build Castle
+      - name: Build StarNote
         env:
           CARGO_BUILD_JOBS: "4"
         run: |
           cargo build --locked --release \
-            --package app --bin castle \
+            --package app --bin starnote \
             --target ${{ matrix.target }}
 
       - name: Report binary size
         run: |
-          BINARY="target/${{ matrix.target }}/release/castle"
+          BINARY="target/${{ matrix.target }}/release/starnote"
           SIZE=$(du -sh "$BINARY" | cut -f1)
           echo "Binary size: $SIZE"
           ls -lh "$BINARY"
@@ -130,21 +130,21 @@ jobs:
         run: |
           VERSION="${{ needs.metadata.outputs.version }}"
           ARCH="${{ matrix.arch }}"
-          BINARY="target/${{ matrix.target }}/release/castle"
+          BINARY="target/${{ matrix.target }}/release/starnote"
           mkdir -p dist/package
 
-          cp "$BINARY" dist/package/castle
-          cp crates/app/assets/castle.desktop dist/package/castle.desktop
-          cp crates/app/assets/icon/castle-app-icon.png dist/package/castle.png
+          cp "$BINARY" dist/package/starnote
+          cp crates/app/assets/starnote.desktop dist/package/starnote.desktop
+          cp crates/app/assets/icon/starnote-app-icon.png dist/package/starnote.png
 
-          tar -czf "dist/Castle-$VERSION-linux-$ARCH.tar.gz" -C dist/package castle castle.desktop castle.png
+          tar -czf "dist/StarNote-$VERSION-linux-$ARCH.tar.gz" -C dist/package starnote starnote.desktop starnote.png
           rm -rf dist/package
           cp install.sh dist/install.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Castle-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}
+          name: StarNote-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7
@@ -159,14 +159,14 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: Castle-*
+          pattern: StarNote-*
           path: release
           merge-multiple: true
 
       - name: Create checksums
         run: |
           cd release
-          sha256sum Castle-*.tar.gz | sort -k2 > SHA256SUMS.txt
+          sha256sum StarNote-*.tar.gz | sort -k2 > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create or update GitHub release
@@ -183,5 +183,5 @@ jobs:
             gh release create "$TAG" "${ASSETS[@]}" \
               --verify-tag \
               --generate-notes \
-              --title "Castle $TAG"
+              --title "StarNote $TAG"
           fi

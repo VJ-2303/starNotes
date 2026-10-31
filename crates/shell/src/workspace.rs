@@ -419,7 +419,7 @@ impl AppShell {
         };
         let data_dir = cx.global::<AppRuntime>().data_dir_handle();
         let receiver =
-            cx.prompt_for_new_path(data_dir.as_path(), Some("castle-workspace.castle.zip"));
+            cx.prompt_for_new_path(data_dir.as_path(), Some("starnote-workspace.starnote.zip"));
         let view = cx.entity().downgrade();
         let app_runtime = cx.global::<AppRuntime>().clone();
         self.workspace_archive_busy = true;
@@ -554,7 +554,7 @@ impl AppShell {
                     DialogHeader::new()
                         .child(DialogTitle::new().child("Import workspace"))
                         .child(DialogDescription::new().child(format!(
-                            "Choose how to add {archive_name} to this Castle installation."
+                            "Choose how to add {archive_name} to this StarNote installation."
                         ))),
                 )
                 .child(
@@ -763,7 +763,7 @@ async fn watch_change_revisions(
         match publish_change_revision(&store, &sender, &mut last_published).await {
             Ok(true) => {}
             Ok(false) => break,
-            Err(err) => eprintln!("Failed to check for external Castle changes: {err}"),
+            Err(err) => eprintln!("Failed to check for external StarNote changes: {err}"),
         }
     }
 }

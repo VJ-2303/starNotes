@@ -1,6 +1,6 @@
-# Castle
+# StarNote
 
-Castle is a Rust note-taking app for Linux built with GPUI Kit (`gpui-kit`).
+StarNote is a Rust note-taking app for Linux built with GPUI Kit (`gpui-kit`).
 
 ## Working Agreement
 

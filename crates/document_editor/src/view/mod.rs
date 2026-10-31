@@ -13,7 +13,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
-    input::{self, Editor, EditorState, Input, RopeExt as _},
+    input::{self, Editor, Input, RopeExt as _},
     resizable::{h_resizable, resizable_panel, v_resizable},
     scroll::ScrollableElement,
     text::{TextView, TextViewStyle},
@@ -26,7 +26,6 @@ use std::{ops::Range, path::Path};
 
 use super::action::{FormatDocument, ToggleFocusMode, ToggleTypewriterScrolling, ToggleZenMode};
 use super::document_state::*;
-use super::vim::VimMode;
 use super::{DocumentEditorView, DocumentInspectorTab, DocumentKind};
 use runtime::AppRuntime;
 use settings::AppSettings;
@@ -209,8 +208,6 @@ impl DocumentEditorView {
 impl Render for DocumentEditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.mermaid.release_retired_images_after_frame(window);
-        self.sync_vim_setting(window, cx);
-        self.sync_vim_search_focus(window, cx);
         let theme_background = cx.theme().background;
         let theme_border = cx.theme().border;
         let theme_input = cx.theme().input;
@@ -218,11 +215,10 @@ impl Render for DocumentEditorView {
             .zen
             .status_bar_visible(AppSettings::editor_status_line_visible(cx));
         let outline_rendered = self.effective_outline_rendered();
-        let vim_context = self.vim_context();
 
         v_flex()
             .id("document-editor-window")
-            .key_context(vim_context.as_str())
+            .key_context("DocumentEditor")
             .track_focus(&self.focus_handle)
             .relative()
             .size_full()
@@ -246,9 +242,6 @@ impl Render for DocumentEditorView {
             .on_action(cx.listener(Self::on_action_move_line_down))
             .on_action(cx.listener(Self::on_action_toggle_task))
             .capture_key_down(cx.listener(Self::on_smart_edit_key_down))
-            .on_action(cx.listener(Self::on_action_vim_key))
-            .capture_key_down(cx.listener(Self::on_vim_key_down))
-            .capture_action(cx.listener(Self::on_action_vim_insert_escape))
             .child(
                 div()
                     .flex_1()
@@ -307,19 +300,6 @@ impl Render for DocumentEditorView {
             .children(status_line_visible.then(|| self.render_status_bar(cx)))
             .children(self.zen.enabled.then(|| self.render_zen_toolbar(cx)))
             .children(
-                (!status_line_visible && self.vim_is_enabled() && self.mode.shows_source()).then(
-                    || {
-                        div()
-                            .id("vim-mode-overlay")
-                            .debug_selector(|| "vim-mode-overlay".to_string())
-                            .absolute()
-                            .bottom(px(8.))
-                            .left(px(8.))
-                            .child(self.render_vim_mode_indicator(cx))
-                    },
-                ),
-            )
-            .children(
                 (self.kind == DocumentKind::Markdown && self.show_emmet_input).then(|| {
                     div()
                         .key_context("EmmetInput")
@@ -347,32 +327,6 @@ impl Render for DocumentEditorView {
 }
 
 impl DocumentEditorView {
-    fn render_vim_mode_indicator(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (label, color) = match self.vim_mode() {
-            VimMode::Normal => ("NORMAL", cx.theme().accent_foreground),
-            VimMode::Insert => ("INSERT", cx.theme().success),
-            VimMode::Visual => ("VISUAL", cx.theme().warning),
-            VimMode::VisualLine => ("VISUAL LINE", cx.theme().warning),
-        };
-        let command = self.vim_state.state.command_text();
-        h_flex()
-            .id("vim-mode-indicator")
-            .h_5()
-            .px_2()
-            .gap_1()
-            .items_center()
-            .rounded_sm()
-            .bg(color.opacity(0.14))
-            .text_color(color)
-            .text_xs()
-            .child(label)
-            .children(
-                (!command.is_empty())
-                    .then(|| div().text_color(cx.theme().muted_foreground).child(command)),
-            )
-            .into_any_element()
-    }
-
     fn render_outline_for_layout(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.zen.enabled {
             let outline_width = outline_width_for_view(self.outline_width, self.view_width);
@@ -444,133 +398,6 @@ fn zen_shortcut() -> String {
     } else {
         "Ctrl+Alt+Z".to_string()
     }
-}
-
-fn vim_overlay(
-    bounds: Bounds<Pixels>,
-    source_bounds: Bounds<Pixels>,
-    color: Hsla,
-    cursor: bool,
-) -> impl IntoElement {
-    let left = bounds.origin.x - source_bounds.origin.x;
-    let top = bounds.origin.y - source_bounds.origin.y;
-    let width = if cursor {
-        bounds.size.width.max(px(7.))
-    } else {
-        bounds.size.width.max(px(2.))
-    };
-    div()
-        .absolute()
-        .left(left)
-        .top(top)
-        .w(width)
-        .h(bounds.size.height)
-        .bg(color)
-}
-
-pub(super) fn vim_selection_bounds(
-    editor: &EditorState,
-    range: Range<usize>,
-    source_bounds: Bounds<Pixels>,
-) -> Vec<Bounds<Pixels>> {
-    if range.end.saturating_sub(range.start) <= 2
-        && editor
-            .text()
-            .slice(range.clone())
-            .chars()
-            .all(|ch| matches!(ch, '\r' | '\n'))
-    {
-        return vim_cursor_bounds(editor, range.start).into_iter().collect();
-    }
-    let (Some(start), Some(end)) = (
-        editor.range_to_bounds(&(range.start..range.start)),
-        editor.range_to_bounds(&(range.end..range.end)),
-    ) else {
-        return editor.range_to_bounds(&range).into_iter().collect();
-    };
-    let line_height = editor.line_height().unwrap_or(start.size.height);
-    let visible_top = source_bounds.top();
-    let visible_bottom = source_bounds.bottom();
-    let is_visible =
-        |origin_y: Pixels| origin_y < visible_bottom && origin_y + line_height > visible_top;
-    if end.origin.y == start.origin.y {
-        if !is_visible(start.origin.y) {
-            return Vec::new();
-        }
-        return vec![Bounds::new(
-            start.origin,
-            size((end.origin.x - start.origin.x).max(px(2.)), line_height),
-        )];
-    }
-
-    let padding = source_horizontal_padding(source_bounds.size.width);
-    let content_left = source_bounds.origin.x + padding;
-    let content_right = source_bounds.origin.x + source_bounds.size.width - padding;
-    let mut bounds = Vec::new();
-    if is_visible(start.origin.y) {
-        bounds.push(Bounds::new(
-            start.origin,
-            size((content_right - start.origin.x).max(px(2.)), line_height),
-        ));
-    }
-    let mut y = start.origin.y + line_height;
-    if y < visible_top {
-        let hidden_rows = ((visible_top - y) / line_height).floor();
-        y += line_height * hidden_rows;
-        while y + line_height <= visible_top {
-            y += line_height;
-        }
-    }
-    let full_row_end = end.origin.y.min(visible_bottom);
-    while y + px(0.5) < full_row_end {
-        bounds.push(Bounds::new(
-            point(content_left, y),
-            size((content_right - content_left).max(px(2.)), line_height),
-        ));
-        y += line_height;
-    }
-    if let Some(tail_width) = vim_selection_tail_width(content_left, end.origin.x)
-        && is_visible(end.origin.y)
-    {
-        bounds.push(Bounds::new(
-            point(content_left, end.origin.y),
-            size(tail_width, line_height),
-        ));
-    }
-    bounds
-}
-
-fn vim_selection_tail_width(content_left: Pixels, end_x: Pixels) -> Option<Pixels> {
-    let width = end_x - content_left;
-    (width > px(0.5)).then_some(width)
-}
-
-pub(super) fn vim_cursor_bounds(editor: &EditorState, cursor: usize) -> Option<Bounds<Pixels>> {
-    let caret = editor.range_to_bounds(&(cursor..cursor))?;
-    let line_height = editor.line_height().unwrap_or(caret.size.height);
-    let character = match editor.text().char_at(cursor) {
-        Some('\r' | '\n') | None => caret,
-        Some(ch) => editor
-            .range_to_bounds(&(cursor..cursor + ch.len_utf8()))
-            .unwrap_or(caret),
-    };
-    Some(normalize_vim_cursor_bounds(character, caret, line_height))
-}
-
-fn normalize_vim_cursor_bounds(
-    character: Bounds<Pixels>,
-    caret: Bounds<Pixels>,
-    line_height: Pixels,
-) -> Bounds<Pixels> {
-    let bounds = if character.size.height > line_height + px(0.5) {
-        caret
-    } else {
-        character
-    };
-    Bounds::new(
-        bounds.origin,
-        size(bounds.size.width.max(px(7.)), line_height),
-    )
 }
 
 fn save_state_status(
@@ -787,9 +614,9 @@ mod tests {
     use super::{
         DocumentKind, MarkdownPreviewVirtualization, SplitLayout, markdown_preview_block_gap,
         markdown_preview_horizontal_padding, markdown_preview_section_top_padding,
-        markdown_preview_virtualization, normalize_vim_cursor_bounds, outline_row_left_padding,
-        outline_width_for_view, reserves_disclosure_space, split_layout_for_width,
-        split_preview_width, split_source_width, status_path, vim_selection_tail_width,
+        markdown_preview_virtualization, outline_row_left_padding, outline_width_for_view,
+        reserves_disclosure_space, split_layout_for_width, split_preview_width, split_source_width,
+        status_path,
     };
     use std::path::Path;
 
@@ -902,23 +729,5 @@ mod tests {
         assert_eq!(path.directory, None);
         assert_eq!(path.file_name, "Not saved yet");
         assert_eq!(path.tooltip, "This note has not been saved to a file");
-    }
-
-    #[test]
-    fn vim_cursor_uses_single_row_caret_geometry_for_cross_row_ranges() {
-        let line_height = px(18.);
-        let caret = Bounds::new(point(px(10.), px(20.)), size(px(0.), line_height));
-        let cross_row = Bounds::new(point(px(10.), px(20.)), size(px(80.), px(36.)));
-        let normalized = normalize_vim_cursor_bounds(cross_row, caret, line_height);
-
-        assert_eq!(normalized.origin, caret.origin);
-        assert_eq!(normalized.size, size(px(7.), line_height));
-    }
-
-    #[test]
-    fn vim_selection_does_not_paint_a_sliver_at_an_exclusive_row_boundary() {
-        assert_eq!(vim_selection_tail_width(px(40.), px(40.)), None);
-        assert_eq!(vim_selection_tail_width(px(40.), px(40.4)), None);
-        assert_eq!(vim_selection_tail_width(px(40.), px(52.)), Some(px(12.)));
     }
 }

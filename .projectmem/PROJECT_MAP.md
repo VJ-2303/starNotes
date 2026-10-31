@@ -3,7 +3,7 @@
 Status: auto-detected from project manifests (an AI session may refine this).
 
 ## Project purpose
-Castle is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+StarNote is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ## Stack
 - Tags: github-actions, rust

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Castle installer — https://github.com/VJ-2303/starNotes
+# StarNote installer — https://github.com/VJ-2303/starNotes
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/VJ-2303/starNotes/main/install.sh | bash
 #   bash install.sh                  # install latest
-#   CASTLE_VERSION=v0.4.0 bash install.sh   # pin a version
-#   CASTLE_INSTALL_DIR=/usr/local/bin bash install.sh  # custom install dir (needs sudo for system paths)
+#   STARNOTE_VERSION=v0.4.0 bash install.sh   # pin a version
+#   STARNOTE_INSTALL_DIR=/usr/local/bin bash install.sh  # custom install dir (needs sudo for system paths)
 
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 REPO="VJ-2303/starNotes"
-BINARY_NAME="castle"
-INSTALL_DIR="${CASTLE_INSTALL_DIR:-$HOME/.local/bin}"
+BINARY_NAME="starnote"
+INSTALL_DIR="${STARNOTE_INSTALL_DIR:-${CASTLE_INSTALL_DIR:-$HOME/.local/bin}}"
 
 # Determine application and icon directories
 if [[ "$INSTALL_DIR" =~ ^/usr(/local)?/bin ]]; then
@@ -30,17 +30,17 @@ fi
 # ── Helpers ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; RESET='\033[0m'
 
-info()    { echo -e "${BOLD}[castle]${RESET} $*"; }
-success() { echo -e "${GREEN}[castle]${RESET} $*"; }
-warn()    { echo -e "${YELLOW}[castle]${RESET} $*" >&2; }
-die()     { echo -e "${RED}[castle] error:${RESET} $*" >&2; exit 1; }
+info()    { echo -e "${BOLD}[starnote]${RESET} $*"; }
+success() { echo -e "${GREEN}[starnote]${RESET} $*"; }
+warn()    { echo -e "${YELLOW}[starnote]${RESET} $*" >&2; }
+die()     { echo -e "${RED}[starnote] error:${RESET} $*" >&2; exit 1; }
 
 need() {
   command -v "$1" &>/dev/null || die "'$1' is required but not installed. Install it and retry."
 }
 
 # ── System checks ─────────────────────────────────────────────────────────────
-[ "$(uname -s)" = "Linux" ] || die "Castle only supports Linux."
+[ "$(uname -s)" = "Linux" ] || die "StarNote only supports Linux."
 
 need curl
 need tar
@@ -52,11 +52,12 @@ case "$ARCH" in
 esac
 
 # ── Resolve version ───────────────────────────────────────────────────────────
-if [ -n "${CASTLE_VERSION:-}" ]; then
-  TAG="$CASTLE_VERSION"
-  info "Installing Castle $TAG (pinned)..."
+VERSION_PIN="${STARNOTE_VERSION:-${CASTLE_VERSION:-}}"
+if [ -n "$VERSION_PIN" ]; then
+  TAG="$VERSION_PIN"
+  info "Installing StarNote $TAG (pinned)..."
 else
-  info "Fetching latest Castle release..."
+  info "Fetching latest StarNote release..."
   TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
     | grep '"tag_name"' \
     | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
@@ -67,7 +68,7 @@ fi
 VERSION="${TAG#v}"
 
 # ── Download ──────────────────────────────────────────────────────────────────
-ARCHIVE="Castle-$VERSION-linux-$ARCH.tar.gz"
+ARCHIVE="StarNote-$VERSION-linux-$ARCH.tar.gz"
 URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE"
 CHECKSUMS_URL="https://github.com/$REPO/releases/download/$TAG/SHA256SUMS.txt"
 
@@ -108,39 +109,41 @@ INSTALLED_AT="$INSTALL_DIR/$BINARY_NAME"
 success "Binary installed → $INSTALLED_AT"
 
 # ── Install App Icon ──────────────────────────────────────────────────────────
-ICON_SRC="$TMP_DIR/castle.png"
+ICON_SRC="$TMP_DIR/starnote.png"
 if [ ! -f "$ICON_SRC" ]; then
   # Fallback: download app icon directly if not packaged inside older archive
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/crates/app/assets/icon/castle-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/crates/app/assets/icon/starnote-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
+    || curl -fsSL "https://raw.githubusercontent.com/$REPO/main/crates/app/assets/icon/starnote-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
+    || curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/crates/app/assets/icon/castle-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
     || curl -fsSL "https://raw.githubusercontent.com/$REPO/main/crates/app/assets/icon/castle-app-icon.png" -o "$ICON_SRC" 2>/dev/null \
     || true
 fi
 
 if [ -f "$ICON_SRC" ]; then
   mkdir -p "$ICON_DIR" "$PIXMAPS_DIR"
-  install -m 644 "$ICON_SRC" "$ICON_DIR/castle.png"
-  install -m 644 "$ICON_SRC" "$PIXMAPS_DIR/castle.png"
-  success "Icon installed → $ICON_DIR/castle.png"
+  install -m 644 "$ICON_SRC" "$ICON_DIR/starnote.png"
+  install -m 644 "$ICON_SRC" "$PIXMAPS_DIR/starnote.png"
+  success "Icon installed → $ICON_DIR/starnote.png"
 else
   warn "Could not acquire icon; continuing without desktop icon."
 fi
 
 # ── Install .desktop Configuration ────────────────────────────────────────────
 mkdir -p "$DESKTOP_DIR"
-DESKTOP_FILE="$DESKTOP_DIR/castle.desktop"
+DESKTOP_FILE="$DESKTOP_DIR/starnote.desktop"
 
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Castle
+Name=StarNote
 GenericName=Note-Taking & Workspace
 Comment=Fast, modern note-taking and workspace app for Linux
 Exec=$INSTALLED_AT %F
-Icon=castle
+Icon=starnote
 Terminal=false
 Categories=Office;Utility;TextEditor;
 MimeType=text/plain;text/markdown;
-StartupWMClass=castle
+StartupWMClass=starnote
 Keywords=notes;markdown;editor;docs;
 EOF
 
@@ -168,5 +171,5 @@ if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then
 fi
 
 echo ""
-success "Castle $TAG installation complete!"
-info "You can launch Castle from your application menu or run 'castle'."
+success "StarNote $TAG installation complete!"
+info "You can launch StarNote from your application menu or run 'starnote'."

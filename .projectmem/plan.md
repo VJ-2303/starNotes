@@ -21,6 +21,12 @@ _Queued, but not started._
 ## Shipped
 _Move completed plans here so the top stays about the future._
 
+- [x] Switched global allocator to `mimalloc` to curb glibc fragmentation and drop memory footprint on Linux.
+- [x] Removed Vim emulation mode:
+  - Deleted `crates/document_editor/src/vim` module and tests (~4,800 lines).
+  - Cleaned Vim key bindings, actions, and contexts from `crates/app/src/keymap.rs`.
+  - Cleaned editor overlays, selection rendering, and status bar mode indicator.
+  - Removed `editor_vim_mode` setting from `crates/settings` and `settings.json`.
 - [x] Pure note-taking app refactor:
   - Pruned dead inspector/UI board code.
   - Pruned dead reminders module.

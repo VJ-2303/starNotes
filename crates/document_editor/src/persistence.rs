@@ -209,7 +209,6 @@ impl DocumentEditorView {
             }
         });
         self.persistence.suppress_editor_events = false;
-        self.reset_vim_command();
         self.focus_source_mode(window, cx);
         self.schedule_document_analysis(false, cx);
 

@@ -11,6 +11,9 @@ use runtime::AppRuntime;
 use settings::AppSettings;
 use shell::{AppShell, ShellIntegration};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
@@ -120,7 +123,7 @@ fn load_bundled_fonts(cx: &mut App) {
 }
 
 fn init_http_client(cx: &mut App) {
-    match reqwest_client::ReqwestClient::user_agent("castle") {
+    match reqwest_client::ReqwestClient::user_agent("starnote") {
         Ok(client) => cx.set_http_client(Arc::new(client)),
         Err(err) => eprintln!("Failed to initialize HTTP client: {err}"),
     }

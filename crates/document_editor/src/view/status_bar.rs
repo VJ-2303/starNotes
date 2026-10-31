@@ -29,10 +29,6 @@ impl DocumentEditorView {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(IconName::File).xsmall())
-                    .children(
-                        (self.vim_is_enabled() && self.mode.shows_source())
-                            .then(|| self.render_vim_mode_indicator(cx)),
-                    )
                     .child(
                         h_flex()
                             .id("document-file-location")

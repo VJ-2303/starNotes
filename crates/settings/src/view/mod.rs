@@ -469,17 +469,6 @@ fn setting_pages(settings: Entity<SettingsView>, cx: &mut App) -> Vec<SettingPag
                     .default_value(false),
                 )
                 .description("Keep the active line near the vertical center while writing."),
-                SettingItem::new(
-                    "Vim Mode",
-                    SettingField::switch(
-                        AppSettings::editor_vim_mode,
-                        AppSettings::set_editor_vim_mode,
-                    )
-                    .default_value(false),
-                )
-                .description(
-                    "Use opt-in Normal, Insert, and Visual modes in document source editors.",
-                ),
             ]))
             .group(SettingGroup::new().title("Markdown").items(vec![
                 SettingItem::new(

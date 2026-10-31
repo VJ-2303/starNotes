@@ -27,7 +27,6 @@ impl DocumentEditorView {
         let source_is_ready = self.analysis.source_bounds.is_some();
         let outline_width = outline_width_for_view(self.outline_width, self.view_width);
         let navigation_highlight = self.render_outline_source_highlight(source_width, cx);
-        let vim_overlays = self.render_vim_overlays(cx);
         let source_layout_mode = self.mode;
         let source_context = if self.kind == DocumentKind::Markdown {
             "MarkdownSource"
@@ -93,7 +92,6 @@ impl DocumentEditorView {
             .relative()
             .opacity(if source_is_ready { 1. } else { 0. })
             .bg(cx.theme().background)
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_vim_mouse_down))
             .on_prepaint(move |bounds, _, cx| {
                 view.update(cx, |this, cx| {
                     let mode_changed = this.analysis.source_bounds_mode != Some(source_layout_mode);
@@ -108,56 +106,6 @@ impl DocumentEditorView {
             })
             .child(div().size_full().min_w_0().py_4().child(input))
             .children(navigation_highlight)
-            .children(vim_overlays)
-    }
-
-    fn render_vim_overlays(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if !self.vim_is_enabled() || self.vim_mode() == VimMode::Insert {
-            return Vec::new();
-        }
-        let Some(source_bounds) = self.analysis.source_bounds else {
-            return Vec::new();
-        };
-
-        let mut overlays = Vec::new();
-        let visual_range = self.vim_visual_range(cx);
-        let editor = self.editor.read(cx);
-        if let Some(selection) = visual_range
-            && let Some(visible_rows) = editor.visible_row_range()
-        {
-            for row in visible_rows {
-                let line_start = editor.text().line_start_offset(row);
-                let line_end = if row + 1 < editor.text().lines_len() {
-                    editor.text().line_start_offset(row + 1)
-                } else {
-                    editor.text().len()
-                };
-                let start = selection.start.max(line_start);
-                let end = selection.end.min(line_end);
-                if start >= end {
-                    continue;
-                }
-                for bounds in vim_selection_bounds(editor, start..end, source_bounds) {
-                    overlays.push(
-                        vim_overlay(
-                            bounds,
-                            source_bounds,
-                            cx.theme().selection.opacity(0.55),
-                            false,
-                        )
-                        .into_any_element(),
-                    );
-                }
-            }
-        }
-
-        if let Some(bounds) = vim_cursor_bounds(editor, editor.cursor()) {
-            overlays.push(
-                vim_overlay(bounds, source_bounds, cx.theme().caret.opacity(0.58), true)
-                    .into_any_element(),
-            );
-        }
-        overlays
     }
 
     fn render_outline_source_highlight(

@@ -3,7 +3,6 @@ use gpui_kit::{Context, EntityInputHandler, Focusable as _, KeyDownEvent, Window
 use std::ops::Range;
 
 use super::action::{MoveLineDown, MoveLineUp, ToggleTask};
-use super::vim::VimMode;
 use super::{DocumentEditorView, DocumentKind};
 
 const APOSTROPHE: char = '\u{27}';
@@ -232,7 +231,6 @@ impl DocumentEditorView {
     fn source_editor_is_active(&self, window: &Window, cx: &mut Context<Self>) -> bool {
         self.mode.shows_source()
             && !self.persistence.is_loading
-            && !(self.vim_is_enabled() && self.vim_mode() != VimMode::Insert)
             && self.editor.focus_handle(cx).is_focused(window)
     }
 }

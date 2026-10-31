@@ -51,7 +51,7 @@ impl CommandPaletteView {
             },
             PaletteCommand {
                 label: "Import workspace".into(),
-                subtitle: "Restore or merge a Castle workspace archive".into(),
+                subtitle: "Restore or merge a StarNote workspace archive".into(),
                 icon: IconName::FolderOpen,
                 kind: PaletteCommandKind::ImportWorkspace,
             },

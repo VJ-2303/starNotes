@@ -14,9 +14,9 @@ use crate::workspace::WorkspaceItem;
 pub const DOCS_NOTE_TITLE: &str = "docs.md";
 
 fn docs_content() -> String {
-    r#"# Welcome to Castle
+    r#"# Welcome to StarNote
 
-Castle is a local-first, lightweight Markdown note-taking app. This guide is an ordinary workspace note: edit it, move it, or delete it whenever you are ready.
+StarNote is a local-first, lightweight Markdown note-taking app. This guide is an ordinary workspace note: edit it, move it, or delete it whenever you are ready.
 
 ## Quick Start
 
@@ -26,18 +26,18 @@ Use `Ctrl+Shift+F` for full-text workspace search across all your notes. The **H
 
 ## Markdown & Editing
 
-| Try this | What Castle does |
+| Try this | What StarNote does |
 | --- | --- |
 | Type `[[` and choose a note | Creates a navigable wikilink and tracks it in the **Links** inspector |
 | Paste an image into a Markdown note | Copies it into local attachments and inserts portable Markdown |
 | Add headings, tables, code, or Mermaid fences | Renders them in **Read** mode and builds a navigable outline |
 | Open a Markdown, JSON, or text file | Edits the original file with matching syntax and outline support |
 
-Use `Ctrl+Shift+O` for the outline and links inspector. In **Write** mode, `Alt+Shift+F` formats the current document; Markdown also supports smart list and task continuation, task toggling, line movement, and optional Vim editing. Use **Read**, **Side by side**, or **Write** as the default note view in **Settings → Editor → Markdown**.
+Use `Ctrl+Shift+O` for the outline and links inspector. In **Write** mode, `Alt+Shift+F` formats the current document; Markdown also supports smart list and task continuation, task toggling, and line movement. Use **Read**, **Side by side**, or **Write** as the default note view in **Settings → Editor → Markdown**.
 
 ## Links that stay useful
 
-Type `[[` to complete references to notes. Castle displays readable labels in **Read** mode and remembers previous names when a note is renamed. Use the **Links** inspector to review outbound links and backlinks, and click a resolved link to navigate.
+Type `[[` to complete references to notes. StarNote displays readable labels in **Read** mode and remembers previous names when a note is renamed. Use the **Links** inspector to review outbound links and backlinks, and click a resolved link to navigate.
 
 ## Recover your work
 
@@ -45,7 +45,7 @@ Deleting a note or project moves it to **Trash** first. Use the undo action or o
 
 ## Make it yours
 
-Settings includes themes, typography, layout, editor behavior, shortcuts, and optional Vim mode. Castle is built to keep your thoughts fast, local, and organized.
+Settings includes themes, typography, layout, editor behavior, and shortcuts. StarNote is built to keep your thoughts fast, local, and organized.
 "#.to_string()
 }
 
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(seeded.docs_note.title, DOCS_NOTE_TITLE);
         assert_eq!(seeded.docs_path, directory.path().join("notes/docs.md"));
         let seeded_docs = fs::read_to_string(&seeded.docs_path)?;
-        assert!(seeded_docs.contains("# Welcome to Castle"));
+        assert!(seeded_docs.contains("# Welcome to StarNote"));
 
         let stored_note = Note::find_by_id(i64::from(seeded.docs_note.id))
             .one(&db)
