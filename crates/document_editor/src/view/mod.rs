@@ -22,7 +22,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use std::{collections::HashSet, ops::Range, path::Path};
+use std::{ops::Range, path::Path};
 
 use super::action::{FormatDocument, ToggleFocusMode, ToggleTypewriterScrolling, ToggleZenMode};
 use super::document_state::*;
@@ -764,15 +764,6 @@ fn link_section_title(label: &str, cx: &App) -> impl IntoElement {
         .text_xs()
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(cx.theme().muted_foreground)
-        .child(label.to_string())
-}
-
-fn link_group_title(label: &str, cx: &App) -> impl IntoElement {
-    div()
-        .px_3()
-        .pt_1()
-        .text_xs()
-        .text_color(cx.theme().muted_foreground.opacity(0.8))
         .child(label.to_string())
 }
 

@@ -71,12 +71,6 @@ impl DocumentEditorView {
                 )
                 .collect()
         };
-        let board_rows = self
-            .render_workspace_link_rows(storage::workspace::links::WorkspaceItemKind::Board, cx);
-        let list_rows =
-            self.render_workspace_link_rows(storage::workspace::links::WorkspaceItemKind::List, cx);
-        let card_rows =
-            self.render_workspace_link_rows(storage::workspace::links::WorkspaceItemKind::Card, cx);
 
         v_flex()
             .id("document-links")
@@ -138,84 +132,10 @@ impl DocumentEditorView {
                             .child(link_section_title("Links to this note", cx))
                             .children(inbound_rows)
                             .child(link_section_title("Links from this note", cx))
-                            .children(outbound_rows)
-                            .child(link_section_title("Board references", cx))
-                            .when(
-                                board_rows.is_empty()
-                                    && list_rows.is_empty()
-                                    && card_rows.is_empty(),
-                                |this| {
-                                    this.child(link_empty_state(
-                                        "This note has no board references",
-                                        cx,
-                                    ))
-                                },
-                            )
-                            .when(!board_rows.is_empty(), |this| {
-                                this.child(link_group_title("Boards", cx))
-                                    .children(board_rows)
-                            })
-                            .when(!list_rows.is_empty(), |this| {
-                                this.child(link_group_title("Lists", cx))
-                                    .children(list_rows)
-                            })
-                            .when(!card_rows.is_empty(), |this| {
-                                this.child(link_group_title("Cards", cx))
-                                    .children(card_rows)
-                            }),
+                            .children(outbound_rows),
                     )
                 },
             )
-    }
-
-    fn render_workspace_link_rows(
-        &self,
-        kind: storage::workspace::links::WorkspaceItemKind,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let mut seen = HashSet::new();
-        self.inspector_links
-            .workspace_links
-            .references
-            .iter()
-            .filter(|reference| reference.item.item.kind == kind)
-            .filter(|reference| seen.insert(reference.item.item))
-            .filter_map(|reference| {
-                let target = crate::links::workspace_navigation_target(&reference.item)?;
-                let item_id = reference.item.item.id;
-                let label = reference.item.breadcrumb();
-                let origin = match reference.origin {
-                    storage::workspace::links::WorkspaceLinkOrigin::Manual => "Linked",
-                    storage::workspace::links::WorkspaceLinkOrigin::Wikilink => "Markdown",
-                    storage::workspace::links::WorkspaceLinkOrigin::Embed => "Embed",
-                };
-                Some(
-                    h_flex()
-                        .id(("workspace-link-reference", item_id as u64))
-                        .min_h_9()
-                        .px_3()
-                        .py_1()
-                        .cursor_pointer()
-                        .hover(|this| this.bg(cx.theme().accent.opacity(0.38)))
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(crate::DocumentEditorEvent::OpenWorkspaceTarget(target));
-                        }))
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .flex_1()
-                                .child(div().text_sm().truncate().child(label))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground.opacity(0.72))
-                                        .child(origin),
-                                ),
-                        )
-                        .into_any_element(),
-                )
-            })
-            .collect()
     }
 
     fn render_note_link_row(

@@ -532,7 +532,7 @@ fn setting_pages(settings: Entity<SettingsView>, cx: &mut App) -> Vec<SettingPag
                                     gpui_kit::div()
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("A private notes and kanban workspace."),
+                                        .child("A private notes workspace."),
                                 ),
                             )
                             .child(

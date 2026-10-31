@@ -1,6 +1,6 @@
 # Castle
 
-Castle is a Rust note-taking and Kanban app for Linux built with GPUI Kit (`gpui-kit`).
+Castle is a Rust note-taking app for Linux built with GPUI Kit (`gpui-kit`).
 
 ## Working Agreement
 

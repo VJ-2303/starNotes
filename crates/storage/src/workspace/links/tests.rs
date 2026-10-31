@@ -95,19 +95,19 @@ async fn repair_batches_never_index_more_than_the_requested_bound() -> Result<()
 
     let first = repair_workspace_link_index_batch(&db, 2).await?;
     assert_eq!(
-        first.indexed_notes + first.indexed_workspace_notes + first.indexed_entries,
+        first.indexed_notes + first.indexed_workspace_notes,
         2
     );
     assert!(first.has_more);
 
     let second = repair_workspace_link_index_batch(&db, 2).await?;
     assert_eq!(
-        second.indexed_notes + second.indexed_workspace_notes + second.indexed_entries,
+        second.indexed_notes + second.indexed_workspace_notes,
         2
     );
     let third = repair_workspace_link_index_batch(&db, 2).await?;
     assert_eq!(
-        third.indexed_notes + third.indexed_workspace_notes + third.indexed_entries,
+        third.indexed_notes + third.indexed_workspace_notes,
         1
     );
     assert!(!third.has_more);

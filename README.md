@@ -1,6 +1,6 @@
 # Castle
 
-Castle is a native note-taking and kanban board app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+Castle is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ## Build & Run on Linux
 
@@ -27,8 +27,3 @@ Write focused notes with Markdown and code blocks.
 
 ![A note with a code block in Castle](images/note-with-code.png)
 
-## Boards
-
-Organize work visually with kanban boards, cards, labels, checklists, and due dates.
-
-![A kanban board in Castle](images/board.png)

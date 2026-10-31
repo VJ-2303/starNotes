@@ -50,10 +50,6 @@ impl SidebarView {
                     title: note.title.to_string(),
                     project_id: Some(i64::from(project.id)),
                     project_name: Some(project.name.to_string()),
-                    board_id: None,
-                    board_title: None,
-                    list_id: None,
-                    list_title: None,
                 });
             }
         }
@@ -66,10 +62,6 @@ impl SidebarView {
                 title: note.title.to_string(),
                 project_id: None,
                 project_name: None,
-                board_id: None,
-                board_title: None,
-                list_id: None,
-                list_title: None,
             });
         }
         storage::workspace::links::WorkspaceReferenceCatalog {

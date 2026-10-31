@@ -575,15 +575,10 @@ pub fn workspace_navigation_target(
     entry: &storage::workspace::links::WorkspaceCatalogEntry,
 ) -> Option<WorkspaceNavigationTarget> {
     let item_id = u32::try_from(entry.item.id).ok()?;
-    match entry.item.kind {
-        storage::workspace::links::WorkspaceItemKind::Note => {
-            Some(WorkspaceNavigationTarget::Note {
-                note_id: item_id,
-                source_offset: None,
-            })
-        }
-        _ => None,
-    }
+    Some(WorkspaceNavigationTarget::Note {
+        note_id: item_id,
+        source_offset: None,
+    })
 }
 
 #[allow(dead_code)]
@@ -687,30 +682,11 @@ fn reference_query_at_cursor(text: &str, cursor: usize) -> Option<ReferenceQuery
     let command = text[slash + 1..cursor].split_once(char::is_whitespace);
     let (command, query) = command.unwrap_or((&text[slash + 1..cursor], ""));
     let kind = match command.trim().to_ascii_lowercase().as_str() {
-        "board" => storage::workspace::links::WorkspaceItemKind::Board,
-        "list" => storage::workspace::links::WorkspaceItemKind::List,
-        "card" => storage::workspace::links::WorkspaceItemKind::Card,
-        "board-view" => storage::workspace::links::WorkspaceItemKind::Board,
+        "note" => storage::workspace::links::WorkspaceItemKind::Note,
         _ => return None,
     };
-    let mode = if command.eq_ignore_ascii_case("board-view") {
-        ReferenceCompletionMode::Embed
-    } else {
-        ReferenceCompletionMode::Slash(kind)
-    };
-    let surrounding_newlines = if command.eq_ignore_ascii_case("board-view") {
-        let line_prefix = &line[..slash.saturating_sub(line_start)];
-        let suffix_end = text[cursor..]
-            .find('\n')
-            .map_or(text.len(), |end| cursor + end);
-        let line_suffix = &text[cursor..suffix_end];
-        Some((
-            !line_prefix.trim().is_empty(),
-            !line_suffix.trim().is_empty(),
-        ))
-    } else {
-        None
-    };
+    let mode = ReferenceCompletionMode::Slash(kind);
+    let surrounding_newlines = None;
     Some(ReferenceQuery {
         replace_range: slash..cursor,
         query: query.trim().to_string(),
@@ -757,115 +733,6 @@ fn contains_unescaped_query_delimiter(value: &str) -> bool {
     false
 }
 
-fn split_unescaped_fragment(value: &str, delimiter: char) -> Option<(&str, &str)> {
-    let mut escaped = false;
-    for (index, character) in value.char_indices() {
-        if escaped {
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == delimiter {
-            return Some((&value[..index], &value[index + character.len_utf8()..]));
-        }
-    }
-    None
-}
-
-fn reference_entry_matches_query(
-    catalog: &storage::workspace::links::WorkspaceReferenceCatalog,
-    entry: &storage::workspace::links::WorkspaceCatalogEntry,
-    normalized_query: &str,
-) -> bool {
-    if normalized_query.is_empty() {
-        return true;
-    }
-    if reference_entry_paths(catalog, entry)
-        .iter()
-        .any(|path| path.contains(normalized_query))
-    {
-        return true;
-    }
-    false
-}
-
-fn reference_entry_paths(
-    catalog: &storage::workspace::links::WorkspaceReferenceCatalog,
-    entry: &storage::workspace::links::WorkspaceCatalogEntry,
-) -> Vec<String> {
-    let segments = catalog.item_path(entry);
-    let mut targets = Vec::new();
-    if let (Some(project_id), Some(_)) = (entry.project_id, entry.project_name.as_ref()) {
-        targets.push(Some(
-            storage::workspace::links::WorkspaceAliasTarget::Project(project_id),
-        ));
-    }
-    match entry.item.kind {
-        storage::workspace::links::WorkspaceItemKind::Note
-        | storage::workspace::links::WorkspaceItemKind::Board => {
-            targets.push(Some(storage::workspace::links::WorkspaceAliasTarget::Item(
-                entry.item,
-            )));
-        }
-        storage::workspace::links::WorkspaceItemKind::List => {
-            targets.push(entry.board_id.map(|id| {
-                storage::workspace::links::WorkspaceAliasTarget::Item(
-                    storage::workspace::links::WorkspaceItemRef {
-                        kind: storage::workspace::links::WorkspaceItemKind::Board,
-                        id,
-                    },
-                )
-            }));
-            targets.push(Some(storage::workspace::links::WorkspaceAliasTarget::Item(
-                entry.item,
-            )));
-        }
-        storage::workspace::links::WorkspaceItemKind::Card => {
-            targets.push(entry.board_id.map(|id| {
-                storage::workspace::links::WorkspaceAliasTarget::Item(
-                    storage::workspace::links::WorkspaceItemRef {
-                        kind: storage::workspace::links::WorkspaceItemKind::Board,
-                        id,
-                    },
-                )
-            }));
-            targets.push(entry.list_id.map(|id| {
-                storage::workspace::links::WorkspaceAliasTarget::Item(
-                    storage::workspace::links::WorkspaceItemRef {
-                        kind: storage::workspace::links::WorkspaceItemKind::List,
-                        id,
-                    },
-                )
-            }));
-            targets.push(Some(storage::workspace::links::WorkspaceAliasTarget::Item(
-                entry.item,
-            )));
-        }
-    }
-    let mut paths = vec![Vec::new()];
-    for (segment, target) in segments.into_iter().zip(targets) {
-        let mut options = vec![segment];
-        if let Some(target) = target {
-            options.extend(
-                catalog
-                    .aliases
-                    .iter()
-                    .filter(|alias| alias.target == target)
-                    .map(|alias| alias.alias.clone()),
-            );
-        }
-        let mut next = Vec::with_capacity(paths.len().saturating_mul(options.len()));
-        for path in paths {
-            for option in &options {
-                let mut candidate = path.clone();
-                candidate.push(option.to_lowercase());
-                next.push(candidate);
-            }
-        }
-        paths = next;
-    }
-    paths.into_iter().map(|path| path.join(" / ")).collect()
-}
-
 fn reference_completion_candidates(
     query: &str,
     mode: ReferenceCompletionMode,
@@ -875,13 +742,10 @@ fn reference_completion_candidates(
     catalog: &storage::workspace::links::WorkspaceReferenceCatalog,
 ) -> Vec<WikiLinkCompletionCandidate> {
     let mut candidates = Vec::new();
-    let (selected_kind, query) = reference_kind_query(query);
+    let (_selected_kind, query) = reference_kind_query(query);
     let normalized_query = storage::workspace::links::unescape_segment(query).to_lowercase();
 
-    if matches!(mode, ReferenceCompletionMode::Embed)
-        && selected_kind
-            .is_some_and(|kind| kind != storage::workspace::links::WorkspaceItemKind::Board)
-    {
+    if matches!(mode, ReferenceCompletionMode::Embed) {
         return candidates;
     }
 
@@ -889,12 +753,16 @@ fn reference_completion_candidates(
         mode,
         ReferenceCompletionMode::Link(None)
             | ReferenceCompletionMode::Link(Some(
-                storage::workspace::links::WorkspaceItemKind::Note
+                storage::workspace::links::WorkspaceItemKind::Note,
             ))
+            | ReferenceCompletionMode::Slash(storage::workspace::links::WorkspaceItemKind::Note)
     ) {
         let typed_note = matches!(
             mode,
             ReferenceCompletionMode::Link(Some(storage::workspace::links::WorkspaceItemKind::Note))
+                | ReferenceCompletionMode::Slash(
+                    storage::workspace::links::WorkspaceItemKind::Note,
+                )
         );
         candidates.extend(
             wikilink_matches(query, note_id, project_id, note_catalog)
@@ -927,180 +795,9 @@ fn reference_completion_candidates(
         );
     }
 
-    let item_kind = match mode {
-        ReferenceCompletionMode::Link(kind) => selected_kind.or(kind),
-        ReferenceCompletionMode::Slash(kind) => Some(selected_kind.unwrap_or(kind)),
-        ReferenceCompletionMode::Embed => None,
-    };
-    if matches!(
-        mode,
-        ReferenceCompletionMode::Link(_) | ReferenceCompletionMode::Slash(_)
-    ) {
-        let kind = item_kind;
-        let mut matches = catalog
-            .items
-            .iter()
-            .filter(|entry| entry.item.kind != storage::workspace::links::WorkspaceItemKind::Note)
-            .filter(|entry| kind.is_none_or(|kind| entry.item.kind == kind))
-            .filter(|entry| reference_entry_matches_query(catalog, entry, &normalized_query))
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|entry| {
-            workspace_completion_rank(catalog, entry, &normalized_query, project_id)
-        });
-        candidates.extend(matches.into_iter().filter_map(|entry| {
-            let new_text = catalog.format_item_link(entry.item, None)?;
-            Some(WikiLinkCompletionCandidate {
-                label: entry.title.clone(),
-                detail: Some(format!(
-                    "{} · {}",
-                    entry.item.kind.as_str(),
-                    catalog.item_path(entry).join(" / ")
-                )),
-                kind: completion_kind(entry.item.kind),
-                new_text,
-                rank: workspace_completion_rank(catalog, entry, &normalized_query, project_id),
-            })
-        }));
-    }
-
-    if matches!(mode, ReferenceCompletionMode::Embed) {
-        let (board_query, view_query) = split_unescaped_fragment(query, '#')
-            .map(|(board, view)| (board.trim(), Some(view.trim())))
-            .unwrap_or((query.trim(), None));
-        let normalized_board_query =
-            storage::workspace::links::unescape_segment(board_query).to_lowercase();
-        let normalized_view_query = view_query
-            .map(storage::workspace::links::unescape_segment)
-            .map(|query| query.to_lowercase());
-        let mut matches = Vec::new();
-        for board in catalog
-            .items
-            .iter()
-            .filter(|entry| entry.item.kind == storage::workspace::links::WorkspaceItemKind::Board)
-        {
-            let board_path = catalog.item_path(board).join(" / ");
-            let board_matches =
-                reference_entry_matches_query(catalog, board, &normalized_board_query);
-            if normalized_view_query.is_none()
-                && board_matches
-                && let Some(new_text) = catalog.format_board_view(board.item.id, None)
-            {
-                matches.push(WikiLinkCompletionCandidate {
-                    label: format!("{} · All cards", board.title),
-                    detail: Some(format!("board · {board_path}")),
-                    kind: CompletionItemKind::MODULE,
-                    new_text,
-                    rank: embed_completion_rank(
-                        catalog,
-                        board,
-                        &board_path,
-                        "All cards",
-                        &normalized_board_query,
-                        project_id,
-                        &[],
-                    ),
-                });
-            }
-            for view in catalog
-                .views
-                .iter()
-                .filter(|view| view.board_id == board.item.id)
-            {
-                let label = format!("{} · {}", board.title, view.name);
-                let view_matches = normalized_view_query.as_ref().is_none_or(|query| {
-                    view.name.to_lowercase().contains(query)
-                        || catalog.aliases.iter().any(|alias| {
-                            alias.target
-                                == storage::workspace::links::WorkspaceAliasTarget::SavedView(
-                                    view.id,
-                                )
-                                && alias.alias.to_lowercase().contains(query)
-                        })
-                });
-                if board_matches
-                    && view_matches
-                    && let Some(new_text) = catalog.format_board_view(board.item.id, Some(view.id))
-                {
-                    let view_aliases = catalog
-                        .aliases
-                        .iter()
-                        .filter(|alias| {
-                            alias.target
-                                == storage::workspace::links::WorkspaceAliasTarget::SavedView(
-                                    view.id,
-                                )
-                        })
-                        .map(|alias| alias.alias.to_lowercase())
-                        .collect::<Vec<_>>();
-                    matches.push(WikiLinkCompletionCandidate {
-                        label,
-                        detail: Some(format!("saved view · {board_path} / {}", view.name)),
-                        kind: CompletionItemKind::VALUE,
-                        new_text,
-                        rank: embed_completion_rank(
-                            catalog,
-                            board,
-                            &board_path,
-                            &view.name,
-                            normalized_view_query
-                                .as_deref()
-                                .unwrap_or(&normalized_board_query),
-                            project_id,
-                            &view_aliases,
-                        ),
-                    });
-                }
-            }
-        }
-        candidates.extend(matches);
-    }
-
     candidates.sort_by_key(|candidate| candidate.rank.clone());
     candidates.truncate(12);
     candidates
-}
-
-fn completion_kind(kind: storage::workspace::links::WorkspaceItemKind) -> CompletionItemKind {
-    match kind {
-        storage::workspace::links::WorkspaceItemKind::Board => CompletionItemKind::MODULE,
-        storage::workspace::links::WorkspaceItemKind::List => CompletionItemKind::FOLDER,
-        storage::workspace::links::WorkspaceItemKind::Card => CompletionItemKind::VALUE,
-        storage::workspace::links::WorkspaceItemKind::Note => CompletionItemKind::FILE,
-    }
-}
-
-fn workspace_completion_rank(
-    catalog: &storage::workspace::links::WorkspaceReferenceCatalog,
-    entry: &storage::workspace::links::WorkspaceCatalogEntry,
-    query: &str,
-    project_id: Option<i64>,
-) -> (bool, bool, bool, String, i64) {
-    let title = entry.title.to_lowercase();
-    let breadcrumb = catalog.item_path(entry).join(" / ").to_lowercase();
-    let paths = reference_entry_paths(catalog, entry);
-    let item_aliases = catalog
-        .aliases
-        .iter()
-        .filter(|alias| {
-            alias.target == storage::workspace::links::WorkspaceAliasTarget::Item(entry.item)
-        })
-        .map(|alias| alias.alias.to_lowercase())
-        .collect::<Vec<_>>();
-    let exact = title == query
-        || breadcrumb == query
-        || paths.iter().any(|path| path == query)
-        || item_aliases.iter().any(|alias| alias == query);
-    let prefix = title.starts_with(query)
-        || breadcrumb.starts_with(query)
-        || paths.iter().any(|path| path.starts_with(query))
-        || item_aliases.iter().any(|alias| alias.starts_with(query));
-    (
-        !exact,
-        !prefix,
-        entry.project_id != project_id,
-        breadcrumb,
-        entry.item.id,
-    )
 }
 
 fn note_completion_rank(
@@ -1123,51 +820,6 @@ fn note_completion_rank(
     )
 }
 
-fn embed_completion_rank(
-    catalog: &storage::workspace::links::WorkspaceReferenceCatalog,
-    board: &storage::workspace::links::WorkspaceCatalogEntry,
-    board_path: &str,
-    view_name: &str,
-    query: &str,
-    project_id: Option<i64>,
-    aliases: &[String],
-) -> (bool, bool, bool, String, i64) {
-    let board_title = board.title.to_lowercase();
-    let path = board_path.to_lowercase();
-    let view = view_name.to_lowercase();
-    let label = format!("{board_title} · {view}");
-    let board_paths = reference_entry_paths(catalog, board);
-    let board_aliases = catalog
-        .aliases
-        .iter()
-        .filter(|alias| {
-            alias.target == storage::workspace::links::WorkspaceAliasTarget::Item(board.item)
-        })
-        .map(|alias| alias.alias.to_lowercase())
-        .collect::<Vec<_>>();
-    let exact_alias = aliases.iter().any(|alias| alias == query);
-    let prefix_alias = aliases.iter().any(|alias| alias.starts_with(query));
-    (
-        !(board_title == query
-            || path == query
-            || view == query
-            || label == query
-            || board_paths.iter().any(|path| path == query)
-            || board_aliases.iter().any(|alias| alias == query)
-            || exact_alias),
-        !(board_title.starts_with(query)
-            || path.starts_with(query)
-            || view.starts_with(query)
-            || label.starts_with(query)
-            || board_paths.iter().any(|path| path.starts_with(query))
-            || board_aliases.iter().any(|alias| alias.starts_with(query))
-            || prefix_alias),
-        board.project_id != project_id,
-        format!("{path} · {label}"),
-        board.item.id,
-    )
-}
-
 struct WikiLinkCompletionCandidate {
     label: String,
     detail: Option<String>,
@@ -1182,16 +834,13 @@ fn wikilink_completion_candidates(
     note_id: i64,
     project_id: Option<i64>,
     note_catalog: &[storage::note::links::NoteLinkCatalogEntry],
-    workspace_catalog: &[storage::workspace::links::WorkspaceCatalogEntry],
+    _workspace_catalog: &[storage::workspace::links::WorkspaceCatalogEntry],
 ) -> Vec<WikiLinkCompletionCandidate> {
     let (selected_kind, query) = query
         .split_once(':')
         .and_then(|(prefix, query)| {
             let kind = match prefix.trim().to_ascii_lowercase().as_str() {
                 "note" => storage::workspace::links::WorkspaceItemKind::Note,
-                "board" => storage::workspace::links::WorkspaceItemKind::Board,
-                "list" => storage::workspace::links::WorkspaceItemKind::List,
-                "card" => storage::workspace::links::WorkspaceItemKind::Card,
                 _ => return None,
             };
             Some((Some(kind), query.trim()))
@@ -1217,59 +866,6 @@ fn wikilink_completion_candidates(
                     ),
                 }),
         );
-    }
-
-    if selected_kind != Some(storage::workspace::links::WorkspaceItemKind::Note) {
-        let normalized_query = query.to_lowercase();
-        let mut workspace_matches = workspace_catalog
-            .iter()
-            .filter(|entry| entry.item.kind != storage::workspace::links::WorkspaceItemKind::Note)
-            .filter(|entry| selected_kind.is_none_or(|kind| entry.item.kind == kind))
-            .filter(|entry| {
-                normalized_query.is_empty()
-                    || entry.title.to_lowercase().contains(&normalized_query)
-                    || entry
-                        .breadcrumb()
-                        .to_lowercase()
-                        .contains(&normalized_query)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        workspace_matches.sort_by_key(|entry| {
-            (
-                entry.project_id != project_id,
-                entry.item.kind.as_str(),
-                !entry.title.to_lowercase().starts_with(&normalized_query),
-                entry.breadcrumb().to_lowercase(),
-                entry.item.id,
-            )
-        });
-        candidates.extend(workspace_matches.into_iter().map(|entry| {
-            let kind = match entry.item.kind {
-                storage::workspace::links::WorkspaceItemKind::Board => CompletionItemKind::MODULE,
-                storage::workspace::links::WorkspaceItemKind::List => CompletionItemKind::FOLDER,
-                storage::workspace::links::WorkspaceItemKind::Card => CompletionItemKind::VALUE,
-                storage::workspace::links::WorkspaceItemKind::Note => CompletionItemKind::FILE,
-            };
-            WikiLinkCompletionCandidate {
-                label: entry.title.clone(),
-                detail: Some(entry.breadcrumb()),
-                kind,
-                new_text: entry.stable_link(),
-                rank: (
-                    !(entry.title.eq_ignore_ascii_case(&normalized_query)
-                        || entry.breadcrumb().eq_ignore_ascii_case(&normalized_query)),
-                    !(entry.title.to_lowercase().starts_with(&normalized_query)
-                        || entry
-                            .breadcrumb()
-                            .to_lowercase()
-                            .starts_with(&normalized_query)),
-                    entry.project_id != project_id,
-                    entry.breadcrumb().to_lowercase(),
-                    entry.item.id,
-                ),
-            }
-        }));
     }
 
     candidates.truncate(12);
@@ -1387,92 +983,28 @@ mod tests {
     }
 
     #[test]
-    fn contextual_reference_queries_cover_links_embeds_and_slash_commands() {
-        let link = reference_query_at_cursor("before [[card:Road", "before [[card:Road".len())
+    fn contextual_reference_queries_cover_links_and_slash_commands() {
+        let link = reference_query_at_cursor("before [[note:Road", "before [[note:Road".len())
             .expect("link query should be detected");
         assert_eq!(link.query, "Road");
         assert_eq!(
             link.mode,
-            ReferenceCompletionMode::Link(
-                Some(storage::workspace::links::WorkspaceItemKind::Card,)
-            )
+            ReferenceCompletionMode::Link(Some(storage::workspace::links::WorkspaceItemKind::Note))
         );
 
-        let embed_text = "![[board:Roadmap#Cu";
-        let embed = reference_query_at_cursor(embed_text, embed_text.len())
-            .expect("embed query should be detected");
-        assert_eq!(embed.query, "board:Roadmap#Cu");
-        assert_eq!(embed.mode, ReferenceCompletionMode::Embed);
-
-        let slash_text = "  /card Road";
+        let slash_text = "  /note Road";
         let slash = reference_query_at_cursor(slash_text, slash_text.len())
             .expect("slash query should be detected");
         assert_eq!(slash.query, "Road");
         assert_eq!(
             slash.mode,
-            ReferenceCompletionMode::Slash(storage::workspace::links::WorkspaceItemKind::Card,)
+            ReferenceCompletionMode::Slash(storage::workspace::links::WorkspaceItemKind::Note)
         );
-        let slash_embed =
-            reference_query_at_cursor("Intro /board-view Road", "Intro /board-view Road".len())
-                .expect("board-view slash query should be detected");
-        assert_eq!(slash_embed.surrounding_newlines, Some((true, false)));
         assert!(reference_query_at_cursor(r"\[[Road", 6).is_none());
     }
 
     #[test]
-    fn reference_completion_candidates_use_readable_replacement_text_and_saved_views() {
-        let board = storage::workspace::links::WorkspaceCatalogEntry {
-            item: storage::workspace::links::WorkspaceItemRef {
-                kind: storage::workspace::links::WorkspaceItemKind::Board,
-                id: 1,
-            },
-            title: "Roadmap".into(),
-            project_id: None,
-            project_name: None,
-            board_id: Some(1),
-            board_title: Some("Roadmap".into()),
-            list_id: None,
-            list_title: None,
-        };
-        let catalog = storage::workspace::links::WorkspaceReferenceCatalog {
-            items: vec![board],
-            views: vec![storage::workspace::links::WorkspaceViewCatalogEntry {
-                id: 2,
-                board_id: 1,
-                name: "Current".into(),
-                project_id: None,
-                project_name: None,
-            }],
-            ..Default::default()
-        };
-        let all = reference_completion_candidates(
-            "",
-            ReferenceCompletionMode::Embed,
-            -1,
-            None,
-            &[],
-            &catalog,
-        );
-        assert_eq!(all.len(), 2);
-        assert!(
-            all.iter()
-                .any(|candidate| candidate.new_text == "![[board:Roadmap]]")
-        );
-        assert!(
-            all.iter()
-                .any(|candidate| candidate.new_text == "![[board:Roadmap#Current]]")
-        );
-
-        let typed = reference_completion_candidates(
-            "card:",
-            ReferenceCompletionMode::Embed,
-            -1,
-            None,
-            &[],
-            &catalog,
-        );
-        assert!(typed.is_empty());
-
+    fn reference_completion_candidates_use_readable_replacement_text() {
         let note = storage::note::links::NoteLinkCatalogEntry {
             note_id: 3,
             title: "Target note".into(),
@@ -1481,7 +1013,6 @@ mod tests {
         };
         let note_catalog = storage::workspace::links::WorkspaceReferenceCatalog {
             items: vec![
-                catalog.items[0].clone(),
                 storage::workspace::links::WorkspaceCatalogEntry {
                     item: storage::workspace::links::WorkspaceItemRef {
                         kind: storage::workspace::links::WorkspaceItemKind::Note,
@@ -1490,10 +1021,6 @@ mod tests {
                     title: note.title.clone(),
                     project_id: note.project_id,
                     project_name: note.project_name.clone(),
-                    board_id: None,
-                    board_title: None,
-                    list_id: None,
-                    list_title: None,
                 },
             ],
             ..Default::default()
@@ -1559,10 +1086,6 @@ mod tests {
                     title: "Overview".into(),
                     project_id: None,
                     project_name: None,
-                    board_id: None,
-                    board_title: None,
-                    list_id: None,
-                    list_title: None,
                 },
                 storage::workspace::links::WorkspaceCatalogEntry {
                     item: storage::workspace::links::WorkspaceItemRef {
@@ -1572,10 +1095,6 @@ mod tests {
                     title: note.title.clone(),
                     project_id: note.project_id,
                     project_name: note.project_name.clone(),
-                    board_id: None,
-                    board_title: None,
-                    list_id: None,
-                    list_title: None,
                 },
             ],
             ..Default::default()

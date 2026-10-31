@@ -18,20 +18,6 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ListWorkflowRole {
-    #[default]
-    Neutral,
-    Inbox,
-    Todo,
-    InProgress,
-    Done,
-    Cancelled,
-}
-
-
-
 pub const WORKSPACE_ARCHIVE_FORMAT: &str = "castle-workspace";
 pub const WORKSPACE_ARCHIVE_VERSION: u32 = 1;
 
@@ -53,30 +39,12 @@ pub enum ImportMode {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct WorkspaceArchiveCounts {
     pub projects: usize,
-    pub boards: usize,
-    pub lists: usize,
-    pub entries: usize,
     pub notes: usize,
-    pub board_labels: usize,
-    pub entry_labels: usize,
-    pub entry_attachments: usize,
     pub note_attachments: usize,
-    pub checklist_items: usize,
-    pub board_properties: usize,
-    pub property_options: usize,
-    pub property_values: usize,
-    pub saved_views: usize,
-    pub templates: usize,
     pub note_aliases: usize,
     pub note_links: usize,
     pub workspace_links: usize,
     pub reference_aliases: usize,
-    #[serde(default)]
-    pub recurring_tasks: usize,
-    #[serde(default)]
-    pub workflows: usize,
-    #[serde(default)]
-    pub workflow_runs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,30 +74,12 @@ struct ArchiveManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ArchiveData {
     projects: Vec<ArchiveProject>,
-    boards: Vec<ArchiveBoard>,
-    lists: Vec<ArchiveList>,
-    entries: Vec<ArchiveEntry>,
     notes: Vec<ArchiveNote>,
-    board_labels: Vec<ArchiveBoardLabel>,
-    entry_labels: Vec<ArchiveEntryLabel>,
-    entry_attachments: Vec<ArchiveEntryAttachment>,
     note_attachments: Vec<ArchiveNoteAttachment>,
-    checklist_items: Vec<ArchiveChecklistItem>,
-    board_properties: Vec<ArchiveBoardProperty>,
-    property_options: Vec<ArchivePropertyOption>,
-    property_values: Vec<ArchivePropertyValue>,
-    saved_views: Vec<ArchiveSavedView>,
-    templates: Vec<ArchiveTemplate>,
     note_aliases: Vec<ArchiveNoteAlias>,
     note_links: Vec<ArchiveNoteLink>,
     workspace_links: Vec<ArchiveWorkspaceLink>,
     reference_aliases: Vec<ArchiveReferenceAlias>,
-    #[serde(default)]
-    recurring_tasks: Vec<ArchiveRecurringTask>,
-    #[serde(default)]
-    workflows: Vec<ArchiveWorkflow>,
-    #[serde(default)]
-    workflow_runs: Vec<ArchiveWorkflowRun>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,49 +88,6 @@ struct ArchiveProject {
     name: String,
     archived: bool,
     position: i32,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveBoard {
-    id: i64,
-    title: String,
-    project_id: Option<i64>,
-    is_pinned: bool,
-    last_opened_at: Option<i64>,
-    last_selected_view_id: i64,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveList {
-    id: i64,
-    title: String,
-    board_id: i64,
-    position: i32,
-    #[serde(default)]
-    workflow_role: ListWorkflowRole,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveEntry {
-    id: i64,
-    title: String,
-    description: String,
-    list_id: i64,
-    position: i32,
-    #[serde(default)]
-    start_on: Option<String>,
-    due_on: Option<String>,
-    #[serde(default)]
-    completed_at: Option<i64>,
-    #[serde(default)]
-    cancelled_at: Option<i64>,
-    #[serde(default)]
-    archived: bool,
-    reminder_enabled: bool,
-    reminder_notified_for: Option<String>,
     deleted_at: Option<i64>,
 }
 
@@ -200,33 +107,6 @@ struct ArchiveNote {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveBoardLabel {
-    id: i64,
-    board_id: i64,
-    name: String,
-    color: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveEntryLabel {
-    id: i64,
-    entry_id: i64,
-    board_label_id: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveEntryAttachment {
-    id: i64,
-    entry_id: i64,
-    file_name: String,
-    archive_path: Option<String>,
-    #[serde(skip)]
-    source_file_name: String,
-    #[serde(skip)]
-    bytes: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 struct ArchiveNoteAttachment {
     note_id: i64,
     file_name: String,
@@ -235,67 +115,6 @@ struct ArchiveNoteAttachment {
     source_file_name: String,
     #[serde(skip)]
     bytes: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveChecklistItem {
-    id: i64,
-    entry_id: i64,
-    title: String,
-    checked: bool,
-    position: i32,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveBoardProperty {
-    id: i64,
-    board_id: i64,
-    name: String,
-    kind: String,
-    position: i32,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchivePropertyOption {
-    id: i64,
-    property_id: i64,
-    name: String,
-    color: String,
-    position: i32,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchivePropertyValue {
-    entry_id: i64,
-    property_id: i64,
-    text_value: Option<String>,
-    number_value: Option<f64>,
-    boolean_value: Option<bool>,
-    date_value: Option<String>,
-    option_id: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveSavedView {
-    id: i64,
-    board_id: i64,
-    name: String,
-    position: i32,
-    is_default: bool,
-    config_version: i32,
-    config_json: String,
-    deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveTemplate {
-    id: i64,
-    name: String,
-    description: String,
-    definition_json: String,
-    created_at: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -322,12 +141,7 @@ struct ArchiveNoteLink {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ArchiveWorkspaceLink {
     source_note_id: Option<i64>,
-    source_entry_id: Option<i64>,
     target_note_id: Option<i64>,
-    target_board_id: Option<i64>,
-    target_list_id: Option<i64>,
-    target_entry_id: Option<i64>,
-    target_saved_view_id: Option<i64>,
     origin: String,
     ordinal: i32,
     raw_target: Option<String>,
@@ -344,85 +158,19 @@ struct ArchiveReferenceAlias {
     alias: String,
     normalized_alias: String,
     project_id: Option<i64>,
-    board_id: Option<i64>,
-    list_id: Option<i64>,
-    entry_id: Option<i64>,
-    saved_view_id: Option<i64>,
     created_at: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveRecurringTask {
-    id: i64,
-    entry_id: i64,
-    rule_json: String,
-    next_on: String,
-    #[serde(default)]
-    until_on: Option<String>,
-    #[serde(default = "default_archive_enabled")]
-    enabled: bool,
-    created_at: i64,
-    updated_at: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveWorkflow {
-    id: i64,
-    board_id: i64,
-    name: String,
-    #[serde(default = "default_archive_enabled")]
-    enabled: bool,
-    definition_json: String,
-    created_at: i64,
-    updated_at: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ArchiveWorkflowRun {
-    id: i64,
-    workflow_id: i64,
-    board_id: i64,
-    #[serde(default)]
-    entry_id: Option<i64>,
-    trigger_kind: String,
-    status: String,
-    actions_json: String,
-    #[serde(default)]
-    error: Option<String>,
-    started_at: i64,
-    #[serde(default)]
-    finished_at: Option<i64>,
-}
-
-const fn default_archive_enabled() -> bool {
-    true
 }
 
 impl ArchiveData {
     fn counts(&self) -> WorkspaceArchiveCounts {
         WorkspaceArchiveCounts {
             projects: self.projects.len(),
-            boards: self.boards.len(),
-            lists: self.lists.len(),
-            entries: self.entries.len(),
             notes: self.notes.len(),
-            board_labels: self.board_labels.len(),
-            entry_labels: self.entry_labels.len(),
-            entry_attachments: self.entry_attachments.len(),
             note_attachments: self.note_attachments.len(),
-            checklist_items: self.checklist_items.len(),
-            board_properties: self.board_properties.len(),
-            property_options: self.property_options.len(),
-            property_values: self.property_values.len(),
-            saved_views: self.saved_views.len(),
-            templates: self.templates.len(),
             note_aliases: self.note_aliases.len(),
             note_links: self.note_links.len(),
             workspace_links: self.workspace_links.len(),
             reference_aliases: self.reference_aliases.len(),
-            recurring_tasks: self.recurring_tasks.len(),
-            workflows: self.workflows.len(),
-            workflow_runs: self.workflow_runs.len(),
         }
     }
 }
@@ -442,11 +190,7 @@ pub async fn export_workspace(
         })
         .await?;
     let counts = archive.counts();
-    let missing_attachments = archive
-        .entry_attachments
-        .iter()
-        .filter(|attachment| attachment.archive_path.is_none())
-        .count();
+    let missing_attachments = 0;
 
     write_archive(
         &archive,
@@ -499,8 +243,6 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
         .flatten()
         .collect::<Vec<_>>();
 
-    let archive_entry_attachments: Vec<ArchiveEntryAttachment> = Vec::new();
-
     let archive_notes = notes
         .iter()
         .map(|stored_note| {
@@ -515,7 +257,6 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
                 &stored_note.cached_content,
                 data_dir,
                 &note_attachments,
-                &archive_entry_attachments,
                 true,
             );
             ArchiveNote {
@@ -544,20 +285,8 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
                 deleted_at: model.deleted_at,
             })
             .collect(),
-        boards: Vec::new(),
-        lists: Vec::new(),
-        entries: Vec::new(),
         notes: archive_notes,
-        board_labels: Vec::new(),
-        entry_labels: Vec::new(),
-        entry_attachments: archive_entry_attachments,
         note_attachments,
-        checklist_items: Vec::new(),
-        board_properties: Vec::new(),
-        property_options: Vec::new(),
-        property_values: Vec::new(),
-        saved_views: Vec::new(),
-        templates: Vec::new(),
         note_aliases: note_aliases
             .into_iter()
             .map(|model| ArchiveNoteAlias {
@@ -585,12 +314,7 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
             .into_iter()
             .map(|model| ArchiveWorkspaceLink {
                 source_note_id: model.source_note_id,
-                source_entry_id: model.source_entry_id,
                 target_note_id: model.target_note_id,
-                target_board_id: model.target_board_id,
-                target_list_id: model.target_card_id,
-                target_entry_id: model.target_entry_id,
-                target_saved_view_id: model.target_saved_view_id,
                 origin: model.origin,
                 ordinal: model.ordinal,
                 raw_target: model.raw_target,
@@ -608,16 +332,9 @@ async fn load_archive_data(db: &impl ConnectionTrait, data_dir: &Path) -> Result
                 alias: model.alias,
                 normalized_alias: model.normalized_alias,
                 project_id: model.project_id,
-                board_id: model.board_id,
-                list_id: model.list_id,
-                entry_id: model.card_id,
-                saved_view_id: model.saved_view_id,
                 created_at: model.created_at,
             })
             .collect(),
-        recurring_tasks: Vec::new(),
-        workflows: Vec::new(),
-        workflow_runs: Vec::new(),
     })
 }
 
@@ -666,7 +383,6 @@ fn rewrite_all_attachment_references(
     content: &str,
     data_dir: &Path,
     note_attachments: &[ArchiveNoteAttachment],
-    entry_attachments: &[ArchiveEntryAttachment],
     note_document: bool,
 ) -> String {
     let mut rewritten = content.to_string();
@@ -684,23 +400,6 @@ fn rewrite_all_attachment_references(
             &attachment.source_file_name,
             &replacement,
         );
-    }
-    for attachment in entry_attachments {
-        if let Some(archive_path) = &attachment.archive_path {
-            let replacement = if note_document {
-                format!("../{archive_path}")
-            } else {
-                archive_path.clone()
-            };
-            rewritten = replace_attachment_reference_variants(
-                &rewritten,
-                data_dir,
-                "attachments/entries",
-                attachment.entry_id,
-                &attachment.source_file_name,
-                &replacement,
-            );
-        }
     }
     rewritten
 }
@@ -998,20 +697,6 @@ fn write_archive_file(
         archive.write_all(&bytes)?;
     }
 
-    for attachment in &data.entry_attachments {
-        let Some(archive_path) = &attachment.archive_path else {
-            continue;
-        };
-        let source_path = data_dir
-            .join("attachments")
-            .join("entries")
-            .join(attachment.entry_id.to_string())
-            .join(&attachment.source_file_name);
-        let bytes = read_export_file(&source_path)?;
-        archive.start_file(archive_path, options)?;
-        archive.write_all(&bytes)?;
-    }
-
     archive.finish()?;
     let archive_size = fs::metadata(temporary_path)
         .with_context(|| format!("could not inspect {}", temporary_path.display()))?
@@ -1201,14 +886,6 @@ fn read_archive(archive_path: &Path) -> Result<(ArchiveData, Vec<u8>)> {
                 anyhow::anyhow!("workspace archive is missing {}", attachment.archive_path)
             })?;
     }
-    for attachment in &mut data.entry_attachments {
-        if let Some(path) = &attachment.archive_path {
-            attachment.bytes = entries
-                .get(path)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("workspace archive is missing {path}"))?;
-        }
-    }
 
     Ok((data, settings_json))
 }
@@ -1229,7 +906,6 @@ fn is_supported_archive_entry(path: &str) -> bool {
         || path == SETTINGS_PATH
         || path.starts_with("notes/")
         || path.starts_with("attachments/notes/")
-        || path.starts_with("attachments/entries/")
 }
 
 fn validate_archive_path(path: &str) -> Result<()> {
@@ -1247,62 +923,13 @@ fn validate_archive_path(path: &str) -> Result<()> {
 
 fn validate_archive_data(data: &ArchiveData, entries: &HashMap<String, Vec<u8>>) -> Result<()> {
     let project_ids = validate_id_set("project", data.projects.iter().map(|item| item.id))?;
-    let board_ids = validate_id_set("board", data.boards.iter().map(|item| item.id))?;
-    let list_ids = validate_id_set("list", data.lists.iter().map(|item| item.id))?;
-    let entry_ids = validate_id_set("entry", data.entries.iter().map(|item| item.id))?;
     let note_ids = validate_id_set("note", data.notes.iter().map(|item| item.id))?;
-    let board_label_ids =
-        validate_id_set("board label", data.board_labels.iter().map(|item| item.id))?;
-    let _ = validate_id_set("entry label", data.entry_labels.iter().map(|item| item.id))?;
-    let _ = validate_id_set(
-        "entry attachment",
-        data.entry_attachments.iter().map(|item| item.id),
-    )?;
-    let _ = validate_id_set(
-        "checklist item",
-        data.checklist_items.iter().map(|item| item.id),
-    )?;
-    let property_ids = validate_id_set(
-        "board property",
-        data.board_properties.iter().map(|item| item.id),
-    )?;
-    let option_ids = validate_id_set(
-        "property option",
-        data.property_options.iter().map(|item| item.id),
-    )?;
-    let view_ids = validate_id_set("saved view", data.saved_views.iter().map(|item| item.id))?;
-    let _ = validate_id_set("template", data.templates.iter().map(|item| item.id))?;
     let alias_ids = validate_id_set("note alias", data.note_aliases.iter().map(|item| item.id))?;
     let _ = validate_id_set(
         "reference alias",
         data.reference_aliases.iter().map(|item| item.id),
     )?;
-    let workflow_ids = validate_id_set("workflow", data.workflows.iter().map(|item| item.id))?;
-    let recurring_task_ids = validate_id_set(
-        "recurring task",
-        data.recurring_tasks.iter().map(|item| item.id),
-    )?;
-    let _ = validate_id_set(
-        "workflow run",
-        data.workflow_runs.iter().map(|item| item.id),
-    )?;
 
-    for board in &data.boards {
-        validate_optional_reference("board project", board.project_id, &project_ids)?;
-        if board.last_selected_view_id != 0 {
-            require_reference(
-                "board selected view",
-                board.last_selected_view_id,
-                &view_ids,
-            )?;
-        }
-    }
-    for list in &data.lists {
-        require_reference("list board", list.board_id, &board_ids)?;
-    }
-    for item in &data.entries {
-        require_reference("entry list", item.list_id, &list_ids)?;
-    }
     let mut note_content_paths = HashSet::new();
     for note in &data.notes {
         validate_optional_reference("note project", note.project_id, &project_ids)?;
@@ -1320,37 +947,7 @@ fn validate_archive_data(data: &ArchiveData, entries: &HashMap<String, Vec<u8>>)
             bail!("workspace archive is missing {}", note.content_path);
         }
     }
-    for label in &data.board_labels {
-        require_reference("board label board", label.board_id, &board_ids)?;
-    }
-    for label in &data.entry_labels {
-        require_reference("entry label entry", label.entry_id, &entry_ids)?;
-        require_reference(
-            "entry label board label",
-            label.board_label_id,
-            &board_label_ids,
-        )?;
-    }
     let mut attachment_paths = HashSet::new();
-    for attachment in &data.entry_attachments {
-        require_reference("entry attachment entry", attachment.entry_id, &entry_ids)?;
-        validate_file_name(&attachment.file_name)?;
-        if let Some(path) = &attachment.archive_path {
-            validate_archive_path(path)?;
-            if !path.starts_with(&format!("attachments/entries/n{}/", attachment.entry_id)) {
-                bail!(
-                    "entry attachment {} has a path outside its entry",
-                    attachment.id
-                );
-            }
-            if !attachment_paths.insert(path) {
-                bail!("workspace archive contains duplicate attachment {path}");
-            }
-            if !entries.contains_key(path) {
-                bail!("workspace archive is missing {path}");
-            }
-        }
-    }
     for attachment in &data.note_attachments {
         require_reference("note attachment note", attachment.note_id, &note_ids)?;
         validate_file_name(&attachment.file_name)?;
@@ -1374,27 +971,6 @@ fn validate_archive_data(data: &ArchiveData, entries: &HashMap<String, Vec<u8>>)
             bail!("workspace archive is missing {}", attachment.archive_path);
         }
     }
-    for item in &data.checklist_items {
-        require_reference("checklist entry", item.entry_id, &entry_ids)?;
-    }
-    for property in &data.board_properties {
-        require_reference("property board", property.board_id, &board_ids)?;
-    }
-    for option in &data.property_options {
-        require_reference(
-            "property option property",
-            option.property_id,
-            &property_ids,
-        )?;
-    }
-    for value in &data.property_values {
-        require_reference("property value entry", value.entry_id, &entry_ids)?;
-        require_reference("property value property", value.property_id, &property_ids)?;
-        validate_optional_reference("property value option", value.option_id, &option_ids)?;
-    }
-    for view in &data.saved_views {
-        require_reference("saved view board", view.board_id, &board_ids)?;
-    }
     for alias in &data.note_aliases {
         require_reference("note alias note", alias.note_id, &note_ids)?;
     }
@@ -1412,111 +988,31 @@ fn validate_archive_data(data: &ArchiveData, entries: &HashMap<String, Vec<u8>>)
     }
     let mut workspace_link_keys = HashSet::new();
     for link in &data.workspace_links {
-        let source_count = usize::from(link.source_note_id.is_some())
-            + usize::from(link.source_entry_id.is_some());
-        if source_count != 1 {
-            bail!("workspace link must have exactly one source");
-        }
-        validate_optional_reference("workspace link source note", link.source_note_id, &note_ids)?;
-        validate_optional_reference(
-            "workspace link source entry",
-            link.source_entry_id,
-            &entry_ids,
-        )?;
-
-        let target_count = usize::from(link.target_note_id.is_some())
-            + usize::from(link.target_board_id.is_some())
-            + usize::from(link.target_list_id.is_some())
-            + usize::from(link.target_entry_id.is_some());
-        if target_count != 1 {
-            bail!("workspace link must have exactly one target");
-        }
+        let Some(source_note_id) = link.source_note_id else {
+            bail!("workspace link must have a source note");
+        };
+        require_reference("workspace link source note", source_note_id, &note_ids)?;
         validate_optional_reference("workspace link target note", link.target_note_id, &note_ids)?;
-        validate_optional_reference(
-            "workspace link target board",
-            link.target_board_id,
-            &board_ids,
-        )?;
-        validate_optional_reference("workspace link target list", link.target_list_id, &list_ids)?;
-        validate_optional_reference(
-            "workspace link target entry",
-            link.target_entry_id,
-            &entry_ids,
-        )?;
-        if link.target_saved_view_id.is_some() && link.target_board_id.is_none() {
-            bail!("workspace link saved view target must also target a board");
-        }
-        validate_optional_reference(
-            "workspace link saved view",
-            link.target_saved_view_id,
-            &view_ids,
-        )?;
         if link.origin != "manual"
             && link.origin != "note_wikilink"
-            && link.origin != "entry_wikilink"
             && link.origin != "embed"
         {
             bail!("workspace link has an unsupported origin");
         }
-        let source = (link.source_note_id, link.source_entry_id);
-        if !workspace_link_keys.insert((source, link.ordinal, link.origin.clone())) {
+        if !workspace_link_keys.insert((link.source_note_id, link.ordinal, link.origin.clone())) {
             bail!("workspace archive contains a duplicate workspace link");
         }
     }
     for alias in &data.reference_aliases {
-        let target_count = usize::from(alias.project_id.is_some())
-            + usize::from(alias.board_id.is_some())
-            + usize::from(alias.list_id.is_some())
-            + usize::from(alias.entry_id.is_some())
-            + usize::from(alias.saved_view_id.is_some());
-        if target_count != 1 {
-            bail!("reference alias must have exactly one target");
+        if alias.project_id.is_none() {
+            bail!("reference alias must have a project target");
         }
         validate_optional_reference("reference alias project", alias.project_id, &project_ids)?;
-        validate_optional_reference("reference alias board", alias.board_id, &board_ids)?;
-        validate_optional_reference("reference alias list", alias.list_id, &list_ids)?;
-        validate_optional_reference("reference alias entry", alias.entry_id, &entry_ids)?;
-        validate_optional_reference("reference alias saved view", alias.saved_view_id, &view_ids)?;
         let _ = alias_ids.contains(&alias.id);
     }
-    for recurring_task in &data.recurring_tasks {
-        require_reference("recurring task entry", recurring_task.entry_id, &entry_ids)?;
-        if recurring_task.next_on.is_empty() {
-            bail!(
-                "recurring task {} has no next occurrence",
-                recurring_task.id
-            );
-        }
-        validate_json::<serde_json::Value>(&recurring_task.rule_json, "recurring task rule")?;
-        let _ = recurring_task_ids.contains(&recurring_task.id);
-    }
-    for workflow in &data.workflows {
-        require_reference("workflow board", workflow.board_id, &board_ids)?;
-        validate_json::<serde_json::Value>(&workflow.definition_json, "workflow definition")?;
-    }
-    for run in &data.workflow_runs {
-        require_reference("workflow run workflow", run.workflow_id, &workflow_ids)?;
-        require_reference("workflow run board", run.board_id, &board_ids)?;
-        validate_optional_reference("workflow run entry", run.entry_id, &entry_ids)?;
-        if !matches!(
-            run.status.as_str(),
-            "running" | "succeeded" | "failed" | "skipped"
-        ) {
-            bail!("workflow run {} has an unsupported status", run.id);
-        }
-        validate_json::<serde_json::Value>(&run.actions_json, "workflow run actions")?;
-    }
 
     Ok(())
 }
-
-fn validate_json<T: for<'de> Deserialize<'de>>(value: &str, kind: &str) -> Result<()> {
-    serde_json::from_str::<T>(value).with_context(|| format!("{kind} is not valid JSON"))?;
-    Ok(())
-}
-
-
-
 
 fn validate_id_set(kind: &str, ids: impl IntoIterator<Item = i64>) -> Result<HashSet<i64>> {
     let mut result = HashSet::new();
@@ -1704,14 +1200,11 @@ async fn import_into_transaction(
         );
     }
 
-    let entry_attachment_replacements: HashMap<String, String> = HashMap::new();
-
     for item in &data.notes {
         let target_note_id = mapped_id(&note_ids, item.id, "note")?;
         let content = rewrite_archive_references(
             &item.content,
             &note_attachment_replacements,
-            &entry_attachment_replacements,
             true,
         );
         let file_name = Path::new(&item.content_path)
@@ -1830,7 +1323,6 @@ async fn import_into_transaction(
         &data,
         &note_ids,
         &note_attachment_replacements,
-        &entry_attachment_replacements,
     )
     .await?;
 
@@ -1847,7 +1339,6 @@ async fn import_into_transaction(
             indexed_content: Set(rewrite_archive_references(
                 &item.content,
                 &note_attachment_replacements,
-                &entry_attachment_replacements,
                 true,
             )),
         }
@@ -1860,15 +1351,7 @@ async fn import_into_transaction(
         .context("could not rebuild the workspace search index")?;
     touch_change_revision(transaction).await?;
 
-    let mut warnings = Vec::new();
-    for attachment in &data.entry_attachments {
-        if attachment.archive_path.is_none() {
-            warnings.push(format!(
-                "Attachment '{}' for entry {} was not present in the export.",
-                attachment.file_name, attachment.entry_id
-            ));
-        }
-    }
+    let warnings = Vec::new();
 
     Ok(WorkspaceImportSummary {
         counts,
@@ -1888,17 +1371,10 @@ struct ImportedLinkPosition {
 }
 
 fn parsed_link_positions(content: &str, workspace_only: bool) -> Vec<ImportedLinkPosition> {
-    let embed_ranges = crate::workspace::links::parse_board_view_embeds(content)
-        .into_iter()
-        .map(|embed| embed.start_byte..embed.end_byte)
-        .collect::<Vec<_>>();
     crate::note::links::parse_wikilinks(content)
         .into_iter()
         .filter(|link| {
-            (!workspace_only || crate::workspace::links::is_workspace_target(&link.raw_target))
-                && !embed_ranges
-                    .iter()
-                    .any(|range| range.contains(&link.start_byte))
+            !workspace_only || crate::workspace::links::is_workspace_target(&link.raw_target)
         })
         .map(|link| ImportedLinkPosition {
             raw_target: link.raw_target,
@@ -1910,17 +1386,8 @@ fn parsed_link_positions(content: &str, workspace_only: bool) -> Vec<ImportedLin
         .collect()
 }
 
-fn parsed_embed_positions(content: &str) -> Vec<ImportedLinkPosition> {
-    crate::workspace::links::parse_board_view_embeds(content)
-        .into_iter()
-        .map(|embed| ImportedLinkPosition {
-            raw_target: embed.raw_target,
-            display_text: embed.display_text,
-            start_byte: embed.start_byte as i64,
-            end_byte: embed.end_byte as i64,
-            line_number: embed.line_number as i32,
-        })
-        .collect()
+fn parsed_embed_positions(_content: &str) -> Vec<ImportedLinkPosition> {
+    Vec::new()
 }
 
 async fn refresh_imported_link_offsets(
@@ -1928,14 +1395,12 @@ async fn refresh_imported_link_offsets(
     data: &ArchiveData,
     note_ids: &HashMap<i64, i64>,
     note_attachment_replacements: &HashMap<String, String>,
-    entry_attachment_replacements: &HashMap<String, String>,
 ) -> Result<()> {
     for item in &data.notes {
         let note_id = mapped_id(note_ids, item.id, "note link source")?;
         let content = rewrite_archive_references(
             &item.content,
             note_attachment_replacements,
-            entry_attachment_replacements,
             true,
         );
         let note_links = note_link::Entity::find()
@@ -1962,40 +1427,32 @@ async fn refresh_imported_link_offsets(
 
         refresh_workspace_link_offsets(
             transaction,
-            Some(note_id),
-            None,
+            note_id,
             "note_wikilink",
             &parsed_link_positions(&content, true),
         )
         .await?;
         refresh_workspace_link_offsets(
             transaction,
-            Some(note_id),
-            None,
+            note_id,
             "embed",
             &parsed_embed_positions(&content),
         )
         .await?;
     }
 
-
     Ok(())
 }
 
 async fn refresh_workspace_link_offsets(
     transaction: &DatabaseTransaction,
-    source_note_id: Option<i64>,
-    source_entry_id: Option<i64>,
+    source_note_id: i64,
     origin: &str,
     positions: &[ImportedLinkPosition],
 ) -> Result<()> {
-    let mut query =
-        workspace_link::Entity::find().filter(workspace_link::Column::Origin.eq(origin));
-    query = match (source_note_id, source_entry_id) {
-        (Some(note_id), None) => query.filter(workspace_link::Column::SourceNoteId.eq(note_id)),
-        (None, Some(entry_id)) => query.filter(workspace_link::Column::SourceEntryId.eq(entry_id)),
-        _ => return Ok(()),
-    };
+    let query = workspace_link::Entity::find()
+        .filter(workspace_link::Column::Origin.eq(origin))
+        .filter(workspace_link::Column::SourceNoteId.eq(source_note_id));
 
     for link in query
         .order_by_asc(workspace_link::Column::Ordinal)
@@ -2034,16 +1491,13 @@ fn mapped_optional(
     source_id.map(|id| mapped_id(map, id, kind)).transpose()
 }
 
-
-
 fn rewrite_archive_references(
     content: &str,
     note_replacements: &HashMap<String, String>,
-    entry_replacements: &HashMap<String, String>,
     note_document: bool,
 ) -> String {
     let mut rewritten = content.to_string();
-    for (archive_path, replacement) in note_replacements.iter().chain(entry_replacements.iter()) {
+    for (archive_path, replacement) in note_replacements.iter() {
         let path = if note_document {
             format!("../{archive_path}")
         } else {
@@ -2167,60 +1621,15 @@ mod tests {
     fn attachment_reference_rewrite_respects_path_boundaries() {
         let mut replacements = HashMap::new();
         replacements.insert(
-            "attachments/entries/n1/a1-image.png".to_string(),
-            "attachments/entries/4/image.png".to_string(),
+            "attachments/notes/n1/a1-image.png".to_string(),
+            "attachments/notes/4/image.png".to_string(),
         );
-        let content = "![backup](attachments/entries/n1/a1-image.png.bak) ![image](attachments/entries/n1/a1-image.png)";
+        let content = "![backup](attachments/notes/n1/a1-image.png.bak) ![image](attachments/notes/n1/a1-image.png)";
 
         assert_eq!(
-            rewrite_archive_references(content, &HashMap::new(), &replacements, false),
-            "![backup](attachments/entries/n1/a1-image.png.bak) ![image](attachments/entries/4/image.png)"
+            rewrite_archive_references(content, &replacements, false),
+            "![backup](attachments/notes/n1/a1-image.png.bak) ![image](attachments/notes/4/image.png)"
         );
-    }
-
-    #[test]
-    fn legacy_archives_default_calendar_workflow_and_entry_lifecycle_fields() -> Result<()> {
-        let entry = serde_json::from_value::<ArchiveEntry>(serde_json::json!({
-            "id": 1,
-            "title": "Legacy entry",
-            "description": "",
-            "list_id": 1,
-            "position": 0,
-            "due_on": null,
-            "reminder_enabled": false,
-            "reminder_notified_for": null,
-            "deleted_at": null
-        }))?;
-        assert_eq!(entry.start_on, None);
-        assert_eq!(entry.completed_at, None);
-        assert_eq!(entry.cancelled_at, None);
-        assert!(!entry.archived);
-
-        let data = serde_json::from_value::<ArchiveData>(serde_json::json!({
-            "projects": [],
-            "boards": [],
-            "lists": [],
-            "entries": [],
-            "notes": [],
-            "board_labels": [],
-            "entry_labels": [],
-            "entry_attachments": [],
-            "note_attachments": [],
-            "checklist_items": [],
-            "board_properties": [],
-            "property_options": [],
-            "property_values": [],
-            "saved_views": [],
-            "templates": [],
-            "note_aliases": [],
-            "note_links": [],
-            "workspace_links": [],
-            "reference_aliases": []
-        }))?;
-        assert!(data.recurring_tasks.is_empty());
-        assert!(data.workflows.is_empty());
-        assert!(data.workflow_runs.is_empty());
-        Ok(())
     }
 
     #[tokio::test]
@@ -2346,27 +1755,12 @@ mod tests {
             export.counts,
             WorkspaceArchiveCounts {
                 projects: 1,
-                boards: 0,
-                lists: 0,
-                entries: 0,
                 notes: 2,
-                board_labels: 0,
-                entry_labels: 0,
-                entry_attachments: 0,
                 note_attachments: 1,
-                checklist_items: 0,
-                board_properties: 0,
-                property_options: 0,
-                property_values: 0,
-                saved_views: 0,
-                templates: 0,
                 note_aliases: 1,
                 note_links: 1,
                 workspace_links: 1,
                 reference_aliases: 1,
-                recurring_tasks: 0,
-                workflows: 0,
-                workflow_runs: 0,
             }
         );
 

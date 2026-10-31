@@ -141,7 +141,7 @@ Terminal=false
 Categories=Office;Utility;TextEditor;
 MimeType=text/plain;text/markdown;
 StartupWMClass=castle
-Keywords=notes;markdown;editor;kanban;docs;
+Keywords=notes;markdown;editor;docs;
 EOF
 
 chmod 644 "$DESKTOP_FILE"
