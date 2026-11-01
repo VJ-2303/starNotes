@@ -1,6 +1,6 @@
 # projectmem - starNotes
 
-_Last updated: 2026-10-31_
+_Last updated: 2026-11-01_
 
 ## Project purpose
 StarNote is a native note-taking app for Linux built with Rust and [GPUI Kit](https://github.com/longbridge/gpui-kit).
@@ -23,6 +23,7 @@ StarNote is a native note-taking app for Linux built with Rust and [GPUI Kit](ht
 - ci: add libxkbcommon-x11-dev and xcb dev headers to release workflow
 - gotcha: blaze cannot compile C-binding build scripts like freetype-sys with cc jobserver, plus consumes 4GB+ RAM [freetype-sys]
 - gotcha: cargo test builds with separate profile from cargo check; use cargo check --tests for fast iterative verification without long re-compilation [Cargo.toml]
+- gotcha: tree-sitter cannot be updated to 0.27 because gpui-kit pins tree-sitter ^0.26.13; gpui-kit 0.8.1 removed manual Root::render_dialog_layer in favor of automatic RootPlugin overlays
 
 ## Key files
 - `.codex/config.toml`
