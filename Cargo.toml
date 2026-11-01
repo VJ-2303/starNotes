@@ -21,7 +21,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-gpui-kit = "0.8.1"
+gpui-kit = { version = "0.8.1", features = ["gpui-fast"] }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.10" }
 sea-orm = { version = "2.0.4", features = [ "sqlx-sqlite", "runtime-tokio", "macros" ] }
 tokio = { version = "1.54.1", features = ["fs", "macros", "rt-multi-thread"] }
