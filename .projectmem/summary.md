@@ -15,6 +15,7 @@ StarNote is a native note-taking app for Linux built with Rust and [GPUI Kit](ht
 - Removed Vim emulation mode and associated keymaps, overlays, state, and settings [crates/document_editor/]
 - Switched global allocator to mimalloc to reduce memory fragmentation and lower RSS on Linux [crates/app/src/main.rs]
 - Rename application from Castle to StarNote across binary, desktop entries, app paths, onboarding, and docs
+- Enabled gpui-fast feature in gpui-kit 0.8.1 for optimized GPU quad batching and faster Wayland frame pacing
 
 ## Notes
 - Initial commit
