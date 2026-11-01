@@ -812,7 +812,10 @@ fn read_archive(archive_path: &Path) -> Result<(ArchiveData, Vec<u8>)> {
     let mut total_uncompressed = 0_u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index).context("could not read a ZIP entry")?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .context("invalid ZIP entry name")?
+            .to_string();
         validate_archive_path(&name)?;
         if name.ends_with('/') {
             bail!("workspace archive contains a directory entry");
@@ -1775,8 +1778,9 @@ mod tests {
         );
         let note_path = zip
             .file_names()
+            .filter_map(Result::ok)
             .find(|path| path.starts_with("notes/"))
-            .map(str::to_string)
+            .map(|path| path.to_string())
             .context("workspace archive should contain a Markdown note")?;
         let mut note_archive_content = String::new();
         zip.by_name(&note_path)?

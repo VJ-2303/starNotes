@@ -321,8 +321,7 @@ impl Focusable for AppShell {
 }
 
 impl Render for AppShell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dialog_layer = Root::render_dialog_layer(window, cx);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let command_palette_open = self.command_palette.read(cx).is_open();
         let zen_mode = self
@@ -427,8 +426,7 @@ impl Render for AppShell {
                     )
                     .when(command_palette_open, |this| {
                         this.child(self.command_palette.clone())
-                    })
-                    .children(dialog_layer),
+                    }),
             )
     }
 }

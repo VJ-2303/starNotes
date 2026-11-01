@@ -192,35 +192,31 @@ fn assign_accent_classes(svg: &str, accent_count: usize) -> Result<String> {
 
     Ok(rewrite_str(
         svg,
-        RewriteStrSettings {
-            element_content_handlers: vec![
-                element!(
-                    "g.node, g.mindmap-node, g.classGroup, g.stateGroup",
-                    move |element| {
-                        let index = node_index_for_handler.get() % accent_count;
-                        node_index_for_handler.set(node_index_for_handler.get() + 1);
-                        append_class(element, &format!("castle-mermaid-accent-{index}"))?;
-                        Ok(())
-                    }
-                ),
-                element!("rect.actor", move |element| {
-                    let position = element
-                        .get_attribute("x")
-                        .unwrap_or_else(|| next_actor_index_for_handler.get().to_string());
-                    let index = *actor_positions_for_handler
-                        .borrow_mut()
-                        .entry(position)
-                        .or_insert_with(|| {
-                            let next = next_actor_index_for_handler.get();
-                            next_actor_index_for_handler.set(next + 1);
-                            next % accent_count
-                        });
+        RewriteStrSettings::new()
+            .append_element_content_handler(element!(
+                "g.node, g.mindmap-node, g.classGroup, g.stateGroup",
+                move |element| {
+                    let index = node_index_for_handler.get() % accent_count;
+                    node_index_for_handler.set(node_index_for_handler.get() + 1);
                     append_class(element, &format!("castle-mermaid-accent-{index}"))?;
                     Ok(())
-                }),
-            ],
-            ..RewriteStrSettings::new()
-        },
+                }
+            ))
+            .append_element_content_handler(element!("rect.actor", move |element| {
+                let position = element
+                    .get_attribute("x")
+                    .unwrap_or_else(|| next_actor_index_for_handler.get().to_string());
+                let index = *actor_positions_for_handler
+                    .borrow_mut()
+                    .entry(position)
+                    .or_insert_with(|| {
+                        let next = next_actor_index_for_handler.get();
+                        next_actor_index_for_handler.set(next + 1);
+                        next % accent_count
+                    });
+                append_class(element, &format!("castle-mermaid-accent-{index}"))?;
+                Ok(())
+            })),
     )?)
 }
 

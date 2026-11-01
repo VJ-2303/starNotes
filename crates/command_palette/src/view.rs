@@ -42,7 +42,7 @@ impl CommandPaletteView {
             .pt_12()
             .bg(theme.transparent)
             .key_context("CommandPalette")
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

@@ -11,7 +11,7 @@ pub use action::{
     ToggleSidebarAction,
 };
 use gpui_kit::component::{
-    ActiveTheme, IconName, Root, Sizable as _, TitleBar, WindowExt as _,
+    ActiveTheme, IconName, Sizable as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{

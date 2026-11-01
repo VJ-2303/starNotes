@@ -21,22 +21,22 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-gpui-kit = "0.6.1"
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.1" }
-sea-orm = { version = "2.0.2", features = [ "sqlx-sqlite", "runtime-tokio", "macros" ] }
-tokio = { version = "1.53.1", features = ["fs", "macros", "rt-multi-thread"] }
+gpui-kit = "0.8.1"
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.10" }
+sea-orm = { version = "2.0.4", features = [ "sqlx-sqlite", "runtime-tokio", "macros" ] }
+tokio = { version = "1.54.1", features = ["fs", "macros", "rt-multi-thread"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
 tree-sitter = "0.26"
 tree-sitter-json = "0.24.8"
-schemars = "1.2"
+schemars = "1.2.3"
 toml_edit = "0.25"
 image = "0.25.10"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 merman = { git = "https://github.com/zed-industries/merman", tag = "v0.7.0-with-patches", default-features = false, features = ["render"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.2.1", default-features = false, features = ["deflate"] }
 mimalloc = { version = "0.1", default-features = false }
 
 [profile.dev]

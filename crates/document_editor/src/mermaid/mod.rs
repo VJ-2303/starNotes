@@ -10,7 +10,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, ElementId, Entity, FocusHandle,
     ImageSource, InteractiveElement as _, IntoElement, ParentElement as _, ParsedSvg, RenderImage,
-    SMOOTH_SVG_SCALE_FACTOR, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
+    SMOOTH_SVG_SCALE_FACTOR, ScrollDelta, ScrollEvent, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, Window, accesskit::Role, div, img, point,
     prelude::FluentBuilder as _, px,
 };
@@ -796,10 +796,10 @@ fn render_image_body(
         .w_full()
         .overflow_x_scroll()
         .track_scroll(scroll_handle)
-        .on_scroll_wheel({
+        .on_scroll({
             let editor = editor.clone();
             let scroll_handle = scroll_handle.clone();
-            move |event: &ScrollWheelEvent, window, cx| {
+            move |event: &ScrollEvent, window, cx| {
                 if !(event.modifiers.control || event.modifiers.platform) {
                     let delta = event.delta.pixel_delta(window.line_height());
                     let shifted_delta = shifted_horizontal_delta(
